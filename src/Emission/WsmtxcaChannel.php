@@ -73,4 +73,9 @@ final class WsmtxcaChannel implements VoucherChannel
     {
         return 1;
     }
+
+    public function supportsReprocess(): bool
+    {
+        return false;
+    }
 }

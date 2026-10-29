@@ -166,8 +166,18 @@ final class WsmtxcaTest extends TestCase
 
         $fce = self::facturaA()->setTipoComprobante(TipoComprobante::FCE_FACTURA_A)->setFechaVencimientoPago(new \DateTimeImmutable('+30 days'));
         self::assertContains('FCE_CBU_REQUERIDO', $codes($fce));
-        $fce->addDatoAdicional(new DatoAdicional(21, '2850590940090418135201'));
+        self::assertContains('FCE_TRANSFERENCIA_REQUERIDA', $codes($fce));
+        $fce->addDatoAdicional(new DatoAdicional(21, '2850590940090418135201'))->addDatoAdicional(new DatoAdicional(27, 'SCA'));
         self::assertNotContains('FCE_CBU_REQUERIDO', $codes($fce));
+        self::assertNotContains('FCE_TRANSFERENCIA_REQUERIDA', $codes($fce));
+
+        $notaFce = self::facturaA()->setTipoComprobante(TipoComprobante::FCE_NOTA_CREDITO_A)
+            ->addCbteAsociado(new \RoyaltyFusion\Afip\Model\Sale\CbteAsociado(TipoComprobante::FCE_FACTURA_A, 1, 5, '20111111112', new \DateTimeImmutable('-1 day')));
+        self::assertContains('FCE_ANULACION_REQUERIDA', $codes($notaFce));
+        $notaFce->addDatoAdicional(new DatoAdicional(22, 'N'));
+        self::assertNotContains('FCE_ANULACION_REQUERIDA', $codes($notaFce));
+
+        self::assertNotContains('MTXCA_ACTIVIDADES', $codes(self::facturaA()->setActividades([620100])));
     }
 
     public function testInvalidMtxcaIsNotSent(): void
@@ -196,6 +206,39 @@ final class WsmtxcaTest extends TestCase
         self::assertSame('1050.00', $data['importeSubtotal']);
         self::assertSame(2, $data['arrayItems']['item'][1]['codigoCondicionIVA']);
         self::assertNull($data['arrayItems']['item'][1]['importeIVA']);
+    }
+
+    public function testActivitiesAndDiscountItem(): void
+    {
+        $invoice = self::facturaA()->setNumero(1)->setActividades([620100])
+            ->addDetail(SaleDetail::descuento('bonificacion', 100, AlicuotaIva::IVA_21));
+        (new InvoiceCalculator())->calculate($invoice, true);
+        self::assertSame(100.0, $invoice->getImpNeto()); // 200 − 100
+        self::assertTrue((new InvoiceValidator())->validate($invoice, InvoiceValidator::MODE_MTXCA)->isValid());
+
+        $data = (new \ReflectionClass(WsmtxcaService::class))->newInstanceWithoutConstructor()->buildComprobante($invoice);
+        // Igual que la bonificación de un comprobante real aprobado por ARCA.
+        self::assertSame(['codigo' => null, 'descripcion' => 'bonificacion', 'cantidad' => null, 'codigoUnidadMedida' => 99, 'precioUnitario' => null,
+            'importeBonificacion' => null, 'codigoCondicionIVA' => 5, 'importeIVA' => '-21.00', 'importeItem' => '-121.00'],
+            array_diff_key($data['arrayItems']['item'][1], ['unidadesMtx' => 1, 'codigoMtx' => 1]));
+        self::assertSame(['actividad' => [['codigo' => 620100]]], $data['arrayActividades']);
+        self::assertSame('arrayActividades', array_key_last($data));
+    }
+
+    public function testResendAfterTimeoutReturnsExistingCae(): void
+    {
+        // Reenvío del mismo número: WSMTXCA lo rechaza (102), pero ya estaba autorizado con los mismos datos.
+        $invoice = self::facturaA()->setNumero(15);
+        $this->transport
+            ->on('autorizarComprobanteRequest', MockTransport::java(self::NS, 'autorizarComprobante', '<resultado>R</resultado><arrayErrores><codigoDescripcion><codigo>102</codigo><descripcion>numero</descripcion></codigoDescripcion></arrayErrores>'))
+            ->on('consultarComprobanteRequest', MockTransport::java(self::NS, 'consultarComprobante', '<comprobante><codigoTipoComprobante>1</codigoTipoComprobante><numeroPuntoVenta>1</numeroPuntoVenta>'
+                . '<numeroComprobante>15</numeroComprobante><fechaEmision>' . $invoice->getFechaEmision()->format('Y-m-d') . '</fechaEmision><codigoTipoAutorizacion>E</codigoTipoAutorizacion>'
+                . '<codigoAutorizacion>71253948353400</codigoAutorizacion><fechaVencimiento>2026-11-08</fechaVencimiento><codigoTipoDocumento>80</codigoTipoDocumento>'
+                . '<numeroDocumento>30500010912</numeroDocumento><importeTotal>242.00</importeTotal></comprobante>'));
+        $result = $this->see->sendMtxca($invoice);
+        self::assertTrue($result->isSuccess());
+        self::assertTrue($result->isRecovered());
+        self::assertSame('71253948353400', $invoice->getCae());
     }
 
     public function testDummyHasEmptyBody(): void

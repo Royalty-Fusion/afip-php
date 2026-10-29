@@ -16,6 +16,7 @@ Los montos y plazos normativos (tope de consumidor final, días de tolerancia, e
 | `ALICUOTA_DUPLICADA` | error | `[i].id` | La alícuota … está informada más de una vez; agrupe las bases. |  |
 | `ALICUOTA_INVALIDA` | error | `[i].id` | La alícuota de IVA … no es válida (FEParamGetTiposIva). | 10051 |
 | `BFE_CONCEPTO` | error | `concepto` | El bono fiscal electrónico solo admite bienes (concepto Productos). |  |
+| `BFE_DESCUENTO` | error | `details[i]` | WSBFE no admite líneas de descuento general: use la bonificación del ítem. |  |
 | `BFE_NCM` | error | `details[i].codigoNcm` | Cada ítem del bono fiscal debe tener un código NCM válido (ej. 8471.30.12, ver BFEGetPARAM_NCM). |  |
 | `BFE_NO_SOPORTADO` | error | `[i]` | WSBFE no admite …. |  |
 | `BFE_RANGO` | error | `numeroHasta` | WSBFE autoriza un comprobante por solicitud (sin rangos). |  |
@@ -111,7 +112,6 @@ Los montos y plazos normativos (tope de consumidor final, días de tolerancia, e
 | `LOTE_VACIO` | error | `invoices` | Debe enviar al menos un comprobante. |  |
 | `MONEDA_DESCONOCIDA` | warning (error con catalogosEstrictos) | `moneda` | La moneda "…" no figura en el catálogo local; verifique con FEParamGetTiposMonedas. | 10119 |
 | `MONEDA_INVALIDA` | error | `moneda` | El código de moneda "…" no es válido (3 caracteres, ver FEParamGetTiposMonedas). | 10119 |
-| `MTXCA_ACTIVIDADES` | error | `actividades` | WSMTXCA no admite el detalle de actividades. |  |
 | `MTXCA_OBSERVACIONES` | error | `observaciones` | Las observaciones admiten hasta 2000 caracteres. |  |
 | `MTXCA_OPCIONALES` | error | `opcionales` | WSMTXCA no admite opcionales: use datos adicionales (setDatosAdicionales). |  |
 | `MTXCA_RANGO` | error | `numeroHasta` | WSMTXCA autoriza un comprobante por solicitud (sin rangos). |  |

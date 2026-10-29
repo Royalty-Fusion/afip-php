@@ -360,6 +360,7 @@ class WsmtxcaService extends AbstractJavaService
             'arraySubtotalesIVA' => null,
             'arrayDatosAdicionales' => null,
             'arrayCompradores' => null,
+            'arrayActividades' => null,
         ];
 
         if ($invoice->getCbtesAsociados() !== []) {
@@ -401,6 +402,9 @@ class WsmtxcaService extends AbstractJavaService
                 return $node;
             }, $invoice->getDatosAdicionales())];
         }
+        if ($invoice->getActividades() !== []) {
+            $data['arrayActividades'] = ['actividad' => array_map(static fn (int $id): array => ['codigo' => $id], $invoice->getActividades())];
+        }
         if ($invoice->getCompradores() !== []) {
             $data['arrayCompradores'] = ['comprador' => array_map(static fn ($c): array => [
                 'codigoTipoDocumento' => $c->getTipoDoc(),
@@ -426,6 +430,22 @@ class WsmtxcaService extends AbstractJavaService
             ));
         }
         $gravado = $detail->getTratamientoIva() === SaleDetail::GRAVADO;
+        if ($detail->isDescuento()) {
+            // Bonificación general: unidad 99, sin cantidad ni precio, importes negativos.
+            return [
+                'unidadesMtx' => null,
+                'codigoMtx' => null,
+                'codigo' => $detail->getCodigo(),
+                'descripcion' => $detail->getDescripcion(),
+                'cantidad' => null,
+                'codigoUnidadMedida' => SaleDetail::UNIDAD_BONIFICACION,
+                'precioUnitario' => null,
+                'importeBonificacion' => null,
+                'codigoCondicionIVA' => self::itemVatCode($detail),
+                'importeIVA' => $discrimina && $gravado ? Num::format($iva) : null,
+                'importeItem' => Num::format($item),
+            ];
+        }
         $rate = $gravado && $detail->getAlicuotaIva() !== null ? AlicuotaIva::rate((int) $detail->getAlicuotaIva()) / 100 : 0.0;
 
         // En A/M el precio y la bonificación van sin IVA (precio × cantidad − bonificación + IVA = importe);

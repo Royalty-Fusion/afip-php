@@ -93,8 +93,8 @@ final class See
     private bool $fceCheck = false;
     /** Desvío máximo (%) de la cotización informada respecto de la oficial; null = sin control. */
     private ?float $quotationTolerance = null;
-    /** Verificar que los comprobantes asociados propios existan en ARCA. */
-    private bool $checkAssociated = true;
+    /** Verificar que los comprobantes asociados propios existan en ARCA (mismo web service). */
+    private bool $checkAssociated = false;
     /** Verificar la condición frente al IVA y el estado del receptor en el padrón A5. */
     private bool $padronCheck = false;
     /** @var array<string, mixed> */
@@ -528,6 +528,7 @@ final class See
                     }
 
                     $result = $this->authorizeWithRecovery($channel, $invoices);
+                    $result = $this->checkAlreadyAuthorized($channel, $invoices, $result);
 
                     if ($autoNumber && $this->isNumberingConflict($result, $channel->numberingConflictCodes()) && $attempts < $this->numberingRetries) {
                         $attempts++;
@@ -852,7 +853,8 @@ final class See
                     return [$found, false];
                 }
                 $confirmedMissing = true;
-            } catch (TransportException) {
+            } catch (\Throwable) {
+                // Error de red o respuesta inesperada de ARCA: el resultado sigue siendo incierto.
                 $confirmedMissing = false;
             }
         }
@@ -868,7 +870,7 @@ final class See
         return new UncertainAuthorizationException(
             sprintf(
                 'No se pudo confirmar si ARCA autorizó el comprobante %s %05d-%s (%s). Reenvíe el MISMO comprobante, '
-                . 'con el mismo número, para obtener el resultado; no genere uno nuevo.',
+                . 'con el mismo número: si ya estaba autorizado, el SDK devuelve ese CAE. No genere uno nuevo.',
                 TipoComprobante::description($tipo),
                 $ptoVta,
                 implode(', ', array_map(static fn (int $n): string => sprintf('%08d', $n), $numbers)),
@@ -880,6 +882,33 @@ final class See
             $notFound,
             $previous
         );
+    }
+
+    /**
+     * Servicios sin reproceso (WSMTXCA, WSCT): si ARCA rechaza un comprobante cuyo número ya
+     * figura autorizado con los mismos datos (reenvío tras un error de comunicación), se
+     * devuelve ese resultado en lugar del rechazo.
+     *
+     * @param Invoice[] $invoices
+     */
+    private function checkAlreadyAuthorized(VoucherChannel $channel, array $invoices, AuthorizationResult $result): AuthorizationResult
+    {
+        if ($result->isSuccess() || $channel->supportsReprocess() || count($invoices) !== 1) {
+            return $result;
+        }
+        $invoice = $invoices[0];
+        try {
+            $found = $channel->find($invoice->getTipoComprobante(), $invoice->getPuntoVenta(), (int) $invoice->getNumero());
+        } catch (\Throwable) {
+            return $result;
+        }
+        if ($found === null || $found->cae === null || !$this->matches($found, $invoice)) {
+            return $result;
+        }
+        $invoice->setCae($found->cae);
+        $invoice->setCaeVencimiento($found->vencimiento);
+
+        return AuthorizationResult::recovered($invoice->getPuntoVenta(), $invoice->getTipoComprobante(), $found);
     }
 
     /**
@@ -1074,7 +1103,11 @@ final class See
                     if ($asoc->getCuit() !== null && $asoc->getCuit() !== $this->getCuit()) {
                         continue; // de otro emisor: no se puede consultar
                     }
-                    $found = $channel->find($asoc->getTipo(), $asoc->getPuntoVenta(), $asoc->getNumero());
+                    try {
+                        $found = $channel->find($asoc->getTipo(), $asoc->getPuntoVenta(), $asoc->getNumero());
+                    } catch (\Throwable) {
+                        continue; // no se pudo consultar: no se bloquea el envío
+                    }
                     if ($found === null) {
                         $result->error('CBTE_ASOC_INEXISTENTE', sprintf('%scbtesAsociados[%d]', $prefix, $j), sprintf(
                             'El comprobante asociado %s %05d-%08d no existe como autorizado en ARCA.',
@@ -1112,7 +1145,9 @@ final class See
                     $result->error('RECEPTOR_INEXISTENTE', $prefix . 'client.numDoc', 'El CUIT del receptor no existe en el padrón de ARCA.');
                 } elseif (!$persona->isActiva()) {
                     $result->error('RECEPTOR_INACTIVO', $prefix . 'client.numDoc', sprintf('El CUIT del receptor no está activo en ARCA (%s).', (string) $persona->getEstadoClave()));
-                } elseif ($persona->getCondicionIva() !== null && $client->getCondicionIva() !== null && $persona->getCondicionIva() !== $client->getCondicionIva()) {
+                } elseif ($persona->getCondicionIva() !== null && $client->getCondicionIva() !== null
+                    && self::ivaGroup($persona->getCondicionIva()) !== null
+                    && self::ivaGroup($persona->getCondicionIva()) !== self::ivaGroup((int) $client->getCondicionIva())) {
                     $result->error('CONDICION_IVA_PADRON', $prefix . 'client.condicionIva', sprintf(
                         'La condición frente al IVA informada (%s) no coincide con el padrón de ARCA (%s).',
                         \RoyaltyFusion\Afip\Catalog\CondicionIva::description((int) $client->getCondicionIva()),
@@ -1124,6 +1159,20 @@ final class See
         if (!$result->isValid()) {
             throw new ValidationException($result);
         }
+    }
+
+    /**
+     * Agrupa condiciones equivalentes para comparar con el padrón (que no distingue, por
+     * ejemplo, monotributo social de monotributo). null = el padrón no permite concluir.
+     */
+    private static function ivaGroup(int $condicion): ?string
+    {
+        return match ($condicion) {
+            1 => 'RI',
+            6, 13, 16 => 'MONOTRIBUTO',
+            4, 10, 15 => 'EXENTO',
+            default => null,
+        };
     }
 
     private function checkSalesPoint(VoucherChannel $channel, int $puntoVenta): void

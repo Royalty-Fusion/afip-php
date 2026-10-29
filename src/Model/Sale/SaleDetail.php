@@ -19,6 +19,10 @@ class SaleDetail
     public const GRAVADO = 'gravado';
     public const EXENTO = 'exento';
     public const NO_GRAVADO = 'no_gravado';
+    /** Unidad de medida de bonificación general (WSMTXCA). */
+    public const UNIDAD_BONIFICACION = 99;
+    /** Tipo de ítem de descuento (WSCT). */
+    public const TIPO_ITEM_DESCUENTO = 99;
 
     private ?string $codigo = null;
     private string $descripcion = '';
@@ -39,6 +43,7 @@ class SaleDetail
     private ?float $importeIva = null;
     private ?float $importeItem = null;
     private int $tipoItem = 0;
+    private bool $descuento = false;
     private ?int $codigoTurismo = null;
 
     public function getCodigo(): ?string
@@ -298,6 +303,33 @@ class SaleDetail
     }
 
     /**
+     * Línea de bonificación o descuento general: resta su importe del comprobante.
+     * Indicar el importe positivo; con alícuota si el descuento es sobre ítems gravados.
+     */
+    public static function descuento(string $descripcion, float $importe, ?int $alicuotaIva = null): self
+    {
+        $detail = (new self())->setDescripcion($descripcion)->setCantidad(1)->setPrecioUnitario(abs($importe));
+        $detail->descuento = true;
+        if ($alicuotaIva !== null) {
+            $detail->setAlicuotaIva($alicuotaIva);
+        }
+
+        return $detail;
+    }
+
+    public function isDescuento(): bool
+    {
+        return $this->descuento;
+    }
+
+    public function setDescuento(bool $descuento): static
+    {
+        $this->descuento = $descuento;
+
+        return $this;
+    }
+
+    /**
      * Tipo de ítem de turismo (WSCT consultarTiposItem; 0 = general).
      */
     public function getTipoItem(): int
@@ -334,7 +366,8 @@ class SaleDetail
     {
         $gross = $this->cantidad * $this->precioUnitario;
         $gross -= $gross * $this->bonificacionPorcentaje / 100;
+        $subtotal = $gross - $this->bonificacion;
 
-        return $gross - $this->bonificacion;
+        return $this->descuento ? -abs($subtotal) : $subtotal;
     }
 }

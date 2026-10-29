@@ -118,8 +118,11 @@ final class WsdlSchemaTest extends TestCase
         // WSDL anteriores a la RG 5616: se agregan los campos nuevos según el manual vigente.
         return match ($service) {
             'wsmtxca' => (string) preg_replace(
-                '#(<xsd:element[^>]*name="fechaHoraGen"[^>]*/>)#',
-                '$1<xsd:element minOccurs="0" maxOccurs="1" name="cancelaEnMismaMonedaExtranjera" type="xsd:string"/><xsd:element minOccurs="0" maxOccurs="1" name="condicionIVAReceptor" type="xsd:short"/>',
+                ['#(<xsd:element[^>]*name="fechaHoraGen"[^>]*/>)#', '#(<xsd:element[^>]*name="arrayCompradores"[^>]*/>)#'],
+                [
+                    '$1<xsd:element minOccurs="0" maxOccurs="1" name="cancelaEnMismaMonedaExtranjera" type="xsd:string"/><xsd:element minOccurs="0" maxOccurs="1" name="condicionIVAReceptor" type="xsd:short"/>',
+                    '$1<xsd:element minOccurs="0" maxOccurs="1" name="arrayActividades"><xsd:complexType><xsd:sequence><xsd:element maxOccurs="unbounded" name="actividad"><xsd:complexType><xsd:sequence><xsd:element name="codigo" type="xsd:long"/></xsd:sequence></xsd:complexType></xsd:element></xsd:sequence></xsd:complexType></xsd:element>',
+                ],
                 $xml,
                 1
             ),
@@ -204,7 +207,9 @@ final class WsdlSchemaTest extends TestCase
             ->addCbteAsociado(new CbteAsociado(1, 1, 3, '20111111112', $hoy->modify('-2 days')))
             ->addComprador(new Comprador(80, '30500010912', 100))
             ->addDatoAdicional(new DatoAdicional(21, '2850590940090418135201'))
-            ->addDetail((new SaleDetail())->setDescripcion('Exento')->setPrecioUnitario(10)->setExento()->setCodigoMtx('7790001')->setUnidadesMtx(1));
+            ->addDetail((new SaleDetail())->setDescripcion('Exento')->setPrecioUnitario(10)->setExento()->setCodigoMtx('7790001')->setUnidadesMtx(1))
+            ->addDetail(SaleDetail::descuento('Bonificación', 50, 5))
+            ->setActividades([620100]);
         $calc->calculate($mtx, true);
         $wsm = $see->getWsmtxca();
         $try(fn () => $wsm->authorize($mtx));
@@ -239,6 +244,7 @@ final class WsdlSchemaTest extends TestCase
             ->setClient((new Client())->setTipoDoc(94)->setNumDoc('AB123456')->setCondicionIva(9))
             ->setCodigoPais(203)->setDomicilioReceptor('Calle 1')->setCodigoRelacionEmisorReceptor(3)->setMoneda('DOL', 1000)->setPagoMismaMoneda(false)
             ->addDetail((new SaleDetail())->setCodigoTurismo(1)->setCodigo('T001')->setDescripcion('Alojamiento')->setPrecioUnitario(100)->setAlicuotaIva(5))
+            ->addDetail(SaleDetail::descuento('Descuento', 10, 5))
             ->addTributo(new Tributo(99, 'Tasa municipal', 100, 1, 1))
             ->addCbteAsociado(new CbteAsociado(195, 40, 1))
             ->addDatoAdicional(new DatoAdicional(1, 'a', 'b'))

@@ -169,6 +169,12 @@ La carpeta [`examples/`](examples) tiene un script para cada caso:
 En WSMTXCA, WSBFE y WSCT, ARCA recibe cada ítem con su IVA. Calculá con
 `(new InvoiceCalculator())->calculate($invoice, true)`: esa opción calcula el IVA y el importe de cada
 ítem y arma los subtotales por alícuota como suma de los ítems, tal como los valida ARCA.
+Para una bonificación general usá `SaleDetail::descuento('Bonificación', 100, AlicuotaIva::IVA_21)`.
+WSMTXCA la envía como unidad 99 y WSCT como ítem tipo 99, ambas con importes negativos.
+
+Si un comprobante de WSMTXCA o WSCT se reenvía con el mismo número después de un error de
+comunicación, ARCA lo rechaza por número repetido. En ese caso el SDK consulta el comprobante: si
+ya estaba autorizado con los mismos datos, devuelve ese CAE (`isRecovered()`) en lugar del rechazo.
 
 Los catálogos están en `Catalog\*`: `TipoComprobante`, `TipoDocumento`, `AlicuotaIva`, `Concepto`,
 `CondicionIva`, `TipoTributo`, `TipoOpcional`, `Moneda` y `Exportacion`. Cada uno trae
@@ -181,7 +187,6 @@ ejecuta la misma validación y además hace estos controles en línea:
 
 - El punto de venta está habilitado y no fue dado de baja (`FEParamGetPtosVenta`).
 - La fecha no es anterior a la del último comprobante autorizado.
-- En notas de crédito y débito, el comprobante asociado propio existe en ARCA (`setCheckAssociatedVouchers()`).
 
 Y estos controles opcionales, que consultan otros servicios de ARCA:
 
@@ -189,7 +194,8 @@ Y estos controles opcionales, que consultan otros servicios de ARCA:
 |---|---|
 | `setFceCheck(true)` | Emisor MiPyME: exige FCE cuando el cliente está obligado y el importe alcanza el mínimo, y rechaza la FCE a clientes no obligados (WSFECRED). |
 | `setQuotationTolerance(5.0)` | La cotización no se desvía más de 5 % de la oficial de ARCA. |
-| `setPadronCheck(true)` | El cliente está activo en ARCA y su condición frente al IVA coincide con el padrón. |
+| `setPadronCheck(true)` | El cliente está activo en ARCA y su condición frente al IVA coincide con el padrón (por grupos: el padrón no distingue, por ejemplo, monotributo social de monotributo). |
+| `setCheckAssociatedVouchers(true)` | En notas de crédito y débito, el comprobante asociado propio existe en el mismo web service. No sirve para comprobantes emitidos por otros medios, como Comprobantes en línea o un controlador fiscal. |
 
 El listado completo de reglas, con su código y el error equivalente de ARCA, está en
 [docs/VALIDACIONES.md](docs/VALIDACIONES.md). En resumen, el SDK controla:
@@ -218,7 +224,7 @@ El listado completo de reglas, con su código y el error equivalente de ARCA, es
 - **WSMTXCA, WSBFE y WSCT:** ítems obligatorios, IVA de cada ítem según su alícuota, subtotales iguales a la suma de los ítems y campos propios de cada servicio:
   - WSBFE: código NCM y tributos admitidos.
   - WSCT: relación emisor-receptor, reintegro, tarjeta y SWIFT.
-  - WSMTXCA: FCE con el CBU como dato adicional 21.
+  - WSMTXCA: la FCE usa datos adicionales en lugar de opcionales: 21 (CBU) y 27 (SCA/ADC) en facturas, 22 (anulación S/N) en notas.
 
 Los parámetros normativos se configuran con `ValidatorOptions`. Así, si ARCA cambia un monto o
 un plazo, no hace falta actualizar el SDK:

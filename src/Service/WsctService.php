@@ -300,7 +300,7 @@ class WsctService extends AbstractJavaService
                 }
 
                 return [
-                    'tipo' => $d->getTipoItem(),
+                    'tipo' => $d->isDescuento() ? SaleDetail::TIPO_ITEM_DESCUENTO : $d->getTipoItem(),
                     'codigoTurismo' => $d->getCodigoTurismo(),
                     'codigo' => $d->getCodigo(),
                     'descripcion' => $d->getDescripcion(),
@@ -356,8 +356,14 @@ class WsctService extends AbstractJavaService
     {
         $r = $this->request($operation, $params);
         $inner = $r[$operation . 'Return'] ?? null;
+        if (!is_array($inner)) {
+            // Algunas operaciones usan otro nombre (consultarComprobanteTipoPVentaNro → consultarComprobanteReturn):
+            // se toma el único nodo hijo.
+            $children = array_filter($r, 'is_array');
+            $inner = count($children) === 1 ? reset($children) : $r;
+        }
 
-        return is_array($inner) ? $inner : $r;
+        return $inner;
     }
 
     /**

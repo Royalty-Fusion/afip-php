@@ -91,6 +91,7 @@ final class OnlineChecksTest extends TestCase
 
     public function testAssociatedVoucherMustExist(): void
     {
+        $this->see->setCheckAssociatedVouchers(true);
         $this->transport->on('FECompConsultar', MockTransport::wsfe('FECompConsultar', '<Errors><Err><Code>602</Code><Msg>Sin Resultados</Msg></Err></Errors>'));
         $note = (new Note())->setTipoComprobante(TipoComprobante::NOTA_CREDITO_A)->setNumero(1)
             ->setCompany(Factory::company())->setClient(Factory::clientRi())
@@ -107,6 +108,18 @@ final class OnlineChecksTest extends TestCase
             . '<estadoClave>ACTIVO</estadoClave><idPersona>30500010912</idPersona><razonSocial>X</razonSocial><tipoPersona>JURIDICA</tipoPersona></datosGenerales>'
             . '<datosMonotributo><impuesto><idImpuesto>20</idImpuesto></impuesto></datosMonotributo></personaReturn></ns2:getPersona_v2Response>'));
         self::assertContains('CONDICION_IVA_PADRON', $this->codes(fn () => $this->see->send(Factory::facturaA()->setNumero(1))));
+    }
+
+    public function testPadronAcceptsEquivalentConditions(): void
+    {
+        $this->see->setPadronCheck(true);
+        $this->transport->on('getPersona_v2', MockTransport::envelope('<ns2:getPersona_v2Response xmlns:ns2="http://a5.soap.ws.server.puc.sr/"><personaReturn><datosGenerales>'
+            . '<estadoClave>ACTIVO</estadoClave><idPersona>30500010912</idPersona><razonSocial>X</razonSocial><tipoPersona>FISICA</tipoPersona></datosGenerales>'
+            . '<datosMonotributo><impuesto><idImpuesto>20</idImpuesto></impuesto></datosMonotributo></personaReturn></ns2:getPersona_v2Response>'))
+            ->on('FECAESolicitar', WsfeServiceTest::caeResponse(1));
+        $invoice = Factory::facturaA()->setNumero(1);
+        $invoice->getClient()->setCondicionIva(13); // monotributista social ≈ monotributo en el padrón
+        self::assertTrue($this->see->send($invoice)->isSuccess());
     }
 
     public function testTotalZeroOption(): void

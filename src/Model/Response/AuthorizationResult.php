@@ -108,11 +108,23 @@ final class AuthorizationResult
     {
         $details = [];
         foreach ($vouchers as $v) {
-            $details[] = new CaeDetail('A', $v->cae, $v->vencimiento, $v->numero, $v->numero, $v->fecha, $v->docTipo, $v->docNro, [], $v->raw);
+            $observaciones = array_map(static fn (mixed $o): Message => Message::fromArray($o), Arr::list(Arr::get($v->raw, 'Observaciones.Obs')));
+            $hasta = (int) Arr::int($v->raw, 'CbteHasta', $v->numero);
+            $details[] = new CaeDetail('A', $v->cae, $v->vencimiento, $v->numero, $hasta, $v->fecha, $v->docTipo, $v->docNro, $observaciones, $v->raw);
         }
+        $raw = array_map(static fn ($v): array => $v->raw, $vouchers);
 
-        return (new self('A', 'S', $puntoVenta, $tipo, null, $details, [], [], ['recuperados' => array_map(static fn ($v): array => $v->raw, $vouchers)]))
-            ->markRecovered();
+        return (new self(
+            'A',
+            'S',
+            $puntoVenta,
+            $tipo,
+            Date::fromAfip(Arr::string($vouchers[0]->raw, 'FchProceso')),
+            $details,
+            [],
+            [],
+            ['ResultGet' => count($raw) === 1 ? $raw[0] : $raw]
+        ))->markRecovered();
     }
 
     /**

@@ -46,4 +46,11 @@ interface VoucherChannel
 
     /** Máxima cantidad de comprobantes por solicitud. */
     public function maxBatch(): int;
+
+    /**
+     * true si el servicio devuelve el mismo CAE al reenviar un comprobante ya autorizado
+     * (reproceso de WSFEv1). Si es false, ante un rechazo se consulta si el número ya fue
+     * autorizado con los mismos datos.
+     */
+    public function supportsReprocess(): bool;
 }

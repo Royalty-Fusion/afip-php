@@ -64,7 +64,7 @@ final class WsctTest extends TestCase
         $transport = (new MockTransport())->withLogin()
             ->on('consultarPuntosVentaRequest', self::ret('consultarPuntosVenta', '<arrayPuntosVenta><puntoVenta><numeroPuntoVenta>4000</numeroPuntoVenta><bloqueado>N</bloqueado></puntoVenta></arrayPuntosVenta>'))
             ->on('consultarUltimoComprobanteAutorizadoRequest', self::ret('consultarUltimoComprobanteAutorizado', '<numeroComprobante>7</numeroComprobante><fechaEmision>2026-10-01</fechaEmision>'))
-            ->on('consultarComprobanteTipoPVentaNroRequest', self::ret('consultarComprobanteTipoPVentaNro', '<comprobante><fechaEmision>2026-10-01</fechaEmision></comprobante>'))
+            ->on('consultarComprobanteTipoPVentaNroRequest', MockTransport::java(self::NS, 'consultarComprobanteTipoPVentaNro', '<consultarComprobanteReturn><comprobante><fechaEmision>2026-10-01</fechaEmision></comprobante></consultarComprobanteReturn>'))
             ->on('autorizarComprobanteRequest', self::ret('autorizarComprobante', '<comprobanteResponse><cuit>20111111112</cuit><codigoTipoComprobante>195</codigoTipoComprobante>'
                 . '<numeroPuntoVenta>4000</numeroPuntoVenta><numeroComprobante>8</numeroComprobante><fechaEmision>2026-10-29</fechaEmision><CAE>71253948353499</CAE>'
                 . '<fechaVencimientoCAE>2026-11-08</fechaVencimientoCAE></comprobanteResponse><resultado>A</resultado>'));
@@ -93,6 +93,30 @@ final class WsctTest extends TestCase
         $result = $see->sendTurismo(self::factura()->setNumero(3));
         self::assertFalse($result->isSuccess());
         self::assertTrue($result->hasCode(346));
+    }
+
+    public function testGetVoucherUsesRealReturnNode(): void
+    {
+        $transport = (new MockTransport())->withLogin()->on('consultarComprobanteTipoPVentaNroRequest', MockTransport::java(self::NS, 'consultarComprobanteTipoPVentaNro',
+            '<consultarComprobanteReturn><comprobante><codigoTipoComprobante>195</codigoTipoComprobante><numeroPuntoVenta>40</numeroPuntoVenta><numeroComprobante>8</numeroComprobante>'
+            . '<fechaEmision>2026-10-29</fechaEmision><codigoAutorizacion>71253948353499</codigoAutorizacion><importeTotal>101.00</importeTotal></comprobante></consultarComprobanteReturn>'));
+        $see = (new See(Environment::HOMOLOGACION))->setCertificate(TestCertificate::create())->setTransport($transport);
+        $voucher = $see->getWsct()->getVoucher(195, 40, 8);
+        self::assertNotNull($voucher);
+        self::assertSame('71253948353499', $voucher['codigoAutorizacion']);
+    }
+
+    public function testDiscountItem(): void
+    {
+        $invoice = self::factura()->addDetail(SaleDetail::descuento('Descuento promoción', 10, AlicuotaIva::IVA_21));
+        $invoice->setImporteReintegro(-18.9);
+        (new InvoiceCalculator())->calculate($invoice, true);
+        self::assertSame(90.0, $invoice->getImpNeto());
+        $result = (new InvoiceValidator())->validate($invoice, InvoiceValidator::MODE_CT);
+        self::assertTrue($result->isValid(), implode("\n", array_map('strval', $result->getErrors())));
+        $data = (new \ReflectionClass(WsctService::class))->newInstanceWithoutConstructor()->buildComprobante($invoice->setNumero(1));
+        self::assertSame(99, $data['arrayItems']['item'][1]['tipo']);
+        self::assertSame('-12.10', $data['arrayItems']['item'][1]['importeItem']);
     }
 
     public function testTurismoValidations(): void

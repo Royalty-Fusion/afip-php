@@ -792,9 +792,7 @@ final class InvoiceValidator
         if ($invoice->getOpcionales() !== []) {
             $r->error('MTXCA_OPCIONALES', 'opcionales', 'WSMTXCA no admite opcionales: use datos adicionales (setDatosAdicionales).');
         }
-        if ($invoice->getActividades() !== []) {
-            $r->error('MTXCA_ACTIVIDADES', 'actividades', 'WSMTXCA no admite el detalle de actividades.');
-        }
+        $this->validateActividades($invoice, $r);
         if (mb_strlen((string) $invoice->getObservaciones()) > 2000) {
             $r->error('MTXCA_OBSERVACIONES', 'observaciones', 'Las observaciones admiten hasta 2000 caracteres.');
         }
@@ -811,6 +809,19 @@ final class InvoiceValidator
                 $r->error('FCE_CBU_REQUERIDO', 'datosAdicionales', 'La FCE MiPyME en WSMTXCA debe informar el CBU del emisor como dato adicional tipo 21 (c1).');
             } elseif (!Cbu::isValid($cbu)) {
                 $r->error('FCE_CBU_INVALIDO', 'datosAdicionales', sprintf('El CBU "%s" no es válido.', $cbu));
+            }
+            $transferencia = $invoice->getDatoAdicional(27)?->getCampo(1);
+            if ($transferencia === null) {
+                $r->error('FCE_TRANSFERENCIA_REQUERIDA', 'datosAdicionales', 'La FCE MiPyME en WSMTXCA debe informar la opción de transferencia como dato adicional tipo 27 (c1 = "SCA" o "ADC").');
+            } elseif (!in_array($transferencia, [TipoOpcional::TRANSFERENCIA_SCA, TipoOpcional::TRANSFERENCIA_ADC], true)) {
+                $r->error('FCE_TRANSFERENCIA_INVALIDA', 'datosAdicionales', 'El dato adicional 27 (opción de transferencia) debe ser "SCA" o "ADC".');
+            }
+        } elseif (TipoComprobante::isFce($tipo)) {
+            $anulacion = $invoice->getDatoAdicional(22)?->getCampo(1);
+            if ($anulacion === null) {
+                $r->error('FCE_ANULACION_REQUERIDA', 'datosAdicionales', 'Las notas FCE en WSMTXCA deben informar la anulación como dato adicional tipo 22 (c1 = "S" o "N").');
+            } elseif (!in_array($anulacion, ['S', 'N'], true)) {
+                $r->error('FCE_ANULACION_INVALIDA', 'datosAdicionales', 'El dato adicional 22 (anulación) debe ser "S" o "N".');
             }
         }
         if (TipoComprobante::isFce($tipo) && $invoice->getClient() !== null && $invoice->getClient()->getTipoDoc() !== TipoDocumento::CUIT) {
@@ -946,6 +957,9 @@ final class InvoiceValidator
             }
         }
         foreach ($invoice->getDetails() as $i => $detail) {
+            if ($detail->isDescuento()) {
+                $r->error('BFE_DESCUENTO', sprintf('details[%d]', $i), 'WSBFE no admite líneas de descuento general: use la bonificación del ítem.');
+            }
             if (!preg_match('/^\d{4}(\.\d{2}){1,3}$/', (string) $detail->getCodigoNcm())) {
                 $r->error('BFE_NCM', sprintf('details[%d].codigoNcm', $i), 'Cada ítem del bono fiscal debe tener un código NCM válido (ej. 8471.30.12, ver BFEGetPARAM_NCM).');
             }

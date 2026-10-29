@@ -77,4 +77,9 @@ final class WsfeChannel implements VoucherChannel
     {
         return $this->maxBatch;
     }
+
+    public function supportsReprocess(): bool
+    {
+        return true;
+    }
 }
