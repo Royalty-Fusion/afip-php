@@ -59,6 +59,8 @@ class Invoice
     private array $compradores = [];
     /** @var int[] */
     private array $actividades = [];
+    /** @var DatoAdicional[] Datos adicionales (solo WSMTXCA). */
+    private array $datosAdicionales = [];
 
     /** @var SaleDetail[] */
     private array $details = [];
@@ -550,6 +552,44 @@ class Invoice
         $this->actividades[] = $actividad;
 
         return $this;
+    }
+
+    /**
+     * @return DatoAdicional[]
+     */
+    public function getDatosAdicionales(): array
+    {
+        return $this->datosAdicionales;
+    }
+
+    /**
+     * Datos adicionales de WSMTXCA (consultarTiposDatosAdicionales).
+     *
+     * @param DatoAdicional[] $datosAdicionales
+     */
+    public function setDatosAdicionales(array $datosAdicionales): static
+    {
+        $this->datosAdicionales = array_values($datosAdicionales);
+
+        return $this;
+    }
+
+    public function addDatoAdicional(DatoAdicional $datoAdicional): static
+    {
+        $this->datosAdicionales[] = $datoAdicional;
+
+        return $this;
+    }
+
+    public function getDatoAdicional(int $tipo): ?DatoAdicional
+    {
+        foreach ($this->datosAdicionales as $dato) {
+            if ($dato->getTipo() === $tipo) {
+                return $dato;
+            }
+        }
+
+        return null;
     }
 
     /**

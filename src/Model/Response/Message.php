@@ -21,8 +21,8 @@ final class Message
         if (!is_array($node)) {
             return new self(0, (string) $node);
         }
-        $code = $node['Code'] ?? $node['ErrCode'] ?? $node['EventCode'] ?? 0;
-        $msg = $node['Msg'] ?? $node['ErrMsg'] ?? $node['EventMsg'] ?? '';
+        $code = $node['Code'] ?? $node['ErrCode'] ?? $node['EventCode'] ?? $node['codigo'] ?? 0;
+        $msg = $node['Msg'] ?? $node['ErrMsg'] ?? $node['EventMsg'] ?? $node['descripcion'] ?? '';
 
         return new self((int) $code, is_string($msg) ? trim($msg) : '');
     }

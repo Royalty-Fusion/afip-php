@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace RoyaltyFusion\Afip;
 
+use RoyaltyFusion\Afip\Emission\FoundVoucher;
+use RoyaltyFusion\Afip\Emission\VoucherChannel;
+use RoyaltyFusion\Afip\Emission\WsfeChannel;
+use RoyaltyFusion\Afip\Emission\WsmtxcaChannel;
 use RoyaltyFusion\Afip\Auth\AuthManager;
 use RoyaltyFusion\Afip\Auth\Certificate;
 use RoyaltyFusion\Afip\Auth\FileTicketStorage;
@@ -16,7 +20,7 @@ use RoyaltyFusion\Afip\Exception\ValidationException;
 use RoyaltyFusion\Afip\Model\Export\ExportInvoice;
 use RoyaltyFusion\Afip\Model\Response\AuthorizationResult;
 use RoyaltyFusion\Afip\Model\Response\ExportAuthorizationResult;
-use RoyaltyFusion\Afip\Model\Response\VoucherInfo;
+use RoyaltyFusion\Afip\Model\Sale\BonoFiscalInvoice;
 use RoyaltyFusion\Afip\Model\Sale\Invoice;
 use RoyaltyFusion\Afip\Catalog\TipoComprobante;
 use RoyaltyFusion\Afip\Qr\QrGenerator;
@@ -25,6 +29,8 @@ use RoyaltyFusion\Afip\Service\PadronA13Service;
 use RoyaltyFusion\Afip\Service\PadronA5Service;
 use RoyaltyFusion\Afip\Service\WsfeService;
 use RoyaltyFusion\Afip\Service\WsfexService;
+use RoyaltyFusion\Afip\Service\WsmtxcaService;
+use RoyaltyFusion\Afip\Service\WsbfeService;
 use RoyaltyFusion\Afip\Soap\CurlTransport;
 use RoyaltyFusion\Afip\Soap\SoapTransportInterface;
 use RoyaltyFusion\Afip\Support\Cuit;
@@ -78,14 +84,16 @@ final class See
     private bool $useDefaultLock = true;
     /** Verificar que el punto de venta esté habilitado (FEParamGetPtosVenta) antes de enviar. */
     private bool $verifySalesPoint = true;
-    /** @var array<int, array<string, mixed>>|null */
-    private ?array $salesPoints = null;
+    /** @var array<string, array<int, array{numero: int, bloqueado: bool, baja: ?string}>|null> */
+    private array $salesPoints = [];
 
     private ?AuthManager $authManager = null;
     private ?WsfeService $wsfe = null;
     private ?WsfexService $wsfex = null;
     private ?PadronA5Service $padronA5 = null;
     private ?PadronA13Service $padronA13 = null;
+    private ?WsmtxcaService $wsmtxca = null;
+    private ?WsbfeService $wsbfe = null;
     private ?AbstractService $lastService = null;
 
     private Environment $environment;
@@ -319,6 +327,28 @@ final class See
         ));
     }
 
+    public function getWsmtxca(): WsmtxcaService
+    {
+        return $this->wsmtxca ??= $this->configure(new WsmtxcaService(
+            $this->getAuthManager(),
+            $this->getCuit(),
+            $this->environment,
+            $this->transport(),
+            $this->endpoints[Endpoints::WSMTXCA] ?? null
+        ));
+    }
+
+    public function getWsbfe(): WsbfeService
+    {
+        return $this->wsbfe ??= $this->configure(new WsbfeService(
+            $this->getAuthManager(),
+            $this->getCuit(),
+            $this->environment,
+            $this->transport(),
+            $this->endpoints[Endpoints::WSBFE] ?? null
+        ));
+    }
+
     // ----------------------------------------------------------- Validación
 
     public function validate(Invoice $invoice): ValidationResult
@@ -356,6 +386,17 @@ final class See
      */
     public function sendBatch(array $invoices): AuthorizationResult
     {
+        return $this->emit(new WsfeChannel($this->getWsfe(), $this->validatorOptions->maxRegistrosPorRequest), $invoices);
+    }
+
+    /**
+     * Flujo común de emisión (WSFEv1, WSMTXCA, WSCT): valida, numera, autoriza, reintenta ante
+     * números ocupados y recupera el resultado ante errores de comunicación.
+     *
+     * @param Invoice[] $invoices
+     */
+    private function emit(VoucherChannel $channel, array $invoices): AuthorizationResult
+    {
         $invoices = array_values($invoices);
         foreach ($invoices as $invoice) {
             $company = $invoice->getCompany();
@@ -364,17 +405,20 @@ final class See
             }
         }
         $validator = new InvoiceValidator($this->validatorOptions);
-        $validation = $validator->validateBatch($invoices);
+        $validation = $validator->validateBatch($invoices, $channel->validationMode());
+        if (count($invoices) > $channel->maxBatch()) {
+            $validation->error('LOTE_EXCEDIDO', 'invoices', sprintf('Este servicio admite como máximo %d comprobante(s) por solicitud.', $channel->maxBatch()));
+        }
         if (!$validation->isValid()) {
             throw new ValidationException($validation);
         }
 
         $first = $invoices[0];
-        $key = sprintf('wsfe_%s_%d_%d', $this->getCuit(), $first->getPuntoVenta(), $first->getTipoComprobante());
+        $key = sprintf('%s_%s_%d_%d', $channel->service()->getServiceName(), $this->getCuit(), $first->getPuntoVenta(), $first->getTipoComprobante());
 
-        return $this->locked($key, function () use ($invoices, $first): AuthorizationResult {
-            $wsfe = $this->getWsfe();
-            $this->checkSalesPoint($wsfe, $first->getPuntoVenta());
+        return $this->locked($key, function () use ($channel, $invoices, $first): AuthorizationResult {
+            $this->lastService = $channel->service();
+            $this->checkSalesPoint($channel, $first->getPuntoVenta());
             $autoNumber = $first->getNumero() === null;
             $ranges = array_map(static fn (Invoice $i): int => $i->getNumero() === null ? 0 : (int) $i->getNumeroHasta() - (int) $i->getNumero(), $invoices);
             $attempts = 0;
@@ -382,16 +426,16 @@ final class See
             try {
                 while (true) {
                     if ($autoNumber) {
-                        $last = $wsfe->getLastVoucher($first->getPuntoVenta(), $first->getTipoComprobante());
+                        $last = $channel->lastNumber($first->getPuntoVenta(), $first->getTipoComprobante());
                         $this->assignNumbers($invoices, $ranges, $last + 1);
-                        $this->checkDateAgainstLast($wsfe, $first, $last);
+                        $this->checkDateAgainstLast($channel, $first, $last);
                     }
 
-                    $result = $this->authorizeWithRecovery($wsfe, $invoices);
+                    $result = $this->authorizeWithRecovery($channel, $invoices);
 
-                    if ($autoNumber && $this->isNumberingConflict($result) && $attempts < $this->numberingRetries) {
+                    if ($autoNumber && $this->isNumberingConflict($result, $channel->numberingConflictCodes()) && $attempts < $this->numberingRetries) {
                         $attempts++;
-                        $last = $wsfe->getLastVoucher($first->getPuntoVenta(), $first->getTipoComprobante());
+                        $last = $channel->lastNumber($first->getPuntoVenta(), $first->getTipoComprobante());
                         if ($last + 1 !== $first->getNumero()) {
                             continue; // otro proceso usó el número: se renumera y reintenta
                         }
@@ -413,6 +457,83 @@ final class See
                 throw $e;
             }
         });
+    }
+
+    /**
+     * Valida y autoriza un comprobante con detalle de ítems por WSMTXCA (clases A, B y M).
+     * Calcular antes con InvoiceCalculator::calculate($invoice, true).
+     *
+     * @throws ValidationException|UncertainAuthorizationException
+     */
+    public function sendMtxca(Invoice $invoice): AuthorizationResult
+    {
+        return $this->emit(new WsmtxcaChannel($this->getWsmtxca()), [$invoice]);
+    }
+
+    /**
+     * Valida y autoriza un Bono Fiscal Electrónico (WSBFE). Asigna Id y número si faltan.
+     * Calcular antes con InvoiceCalculator::calculate($invoice, true).
+     *
+     * @throws ValidationException|UncertainAuthorizationException
+     */
+    public function sendBfe(BonoFiscalInvoice $invoice): ExportAuthorizationResult
+    {
+        $company = $invoice->getCompany();
+        if ($company !== null && $company->getCuit() === '') {
+            $company->setCuit($this->getCuit());
+        }
+        $validation = (new InvoiceValidator($this->validatorOptions))->validate($invoice, InvoiceValidator::MODE_BFE);
+        if (!$validation->isValid()) {
+            throw new ValidationException($validation);
+        }
+
+        $key = sprintf('wsbfe_%s_%d_%d', $this->getCuit(), $invoice->getPuntoVenta(), $invoice->getTipoComprobante());
+
+        return $this->locked($key, function () use ($invoice): ExportAuthorizationResult {
+            $wsbfe = $this->getWsbfe();
+            $this->lastService = $wsbfe;
+            $autoNumber = $invoice->getNumero() === null;
+            $autoId = $invoice->getId() === null;
+
+            try {
+                if ($autoNumber) {
+                    $invoice->setNumero($wsbfe->getLastVoucher($invoice->getPuntoVenta(), $invoice->getTipoComprobante()) + 1);
+                }
+                if ($autoId) {
+                    $invoice->setId($wsbfe->getLastId() + 1);
+                }
+                try {
+                    $result = $wsbfe->authorize($invoice);
+                } catch (TransportException $e) {
+                    return $this->recoverBfe($wsbfe, $invoice, $e);
+                }
+            } catch (UncertainAuthorizationException $e) {
+                throw $e;
+            } catch (\Throwable $e) {
+                $this->releaseBfe($invoice, $autoNumber, $autoId);
+                throw $e;
+            }
+            if (!$result->isSuccess()) {
+                $this->releaseBfe($invoice, $autoNumber, $autoId);
+            }
+
+            return $result;
+        });
+    }
+
+    /**
+     * Valida e informa por WSMTXCA un comprobante emitido con CAEA.
+     */
+    public function informCaeaMtxca(Invoice $invoice): AuthorizationResult
+    {
+        $validation = (new InvoiceValidator($this->validatorOptions))->validate($invoice, InvoiceValidator::MODE_MTXCA_CAEA);
+        if (!$validation->isValid()) {
+            throw new ValidationException($validation);
+        }
+        $service = $this->getWsmtxca();
+        $this->lastService = $service;
+
+        return $service->informCaeaVoucher($invoice);
     }
 
     /**
@@ -508,11 +629,10 @@ final class See
     /**
      * @param Invoice[] $invoices
      */
-    private function authorizeWithRecovery(WsfeService $wsfe, array $invoices): AuthorizationResult
+    private function authorizeWithRecovery(VoucherChannel $channel, array $invoices): AuthorizationResult
     {
-        $this->lastService = $wsfe;
         try {
-            return $wsfe->authorize($invoices);
+            return $channel->authorize($invoices);
         } catch (TransportException $e) {
             $first = $invoices[0];
             $numbers = array_map(static fn (Invoice $i): int => (int) $i->getNumero(), $invoices);
@@ -520,10 +640,10 @@ final class See
                 throw $this->uncertain($first->getPuntoVenta(), $first->getTipoComprobante(), $numbers, false, $e);
             }
 
-            $vouchers = [];
+            $found = [];
             $allNotFound = true;
             foreach ($invoices as $invoice) {
-                [$voucher, $confirmedMissing] = $this->lookup(fn (): ?VoucherInfo => $wsfe->getVoucher(
+                [$voucher, $confirmedMissing] = $this->lookup(fn (): ?FoundVoucher => $channel->find(
                     $invoice->getTipoComprobante(),
                     $invoice->getPuntoVenta(),
                     (int) $invoice->getNumero()
@@ -536,24 +656,23 @@ final class See
                     throw new AfipException(sprintf(
                         'El número %s ya fue autorizado por ARCA para otro comprobante (total %s, documento %s).',
                         $invoice->getNumeroCompleto(),
-                        Num::format($voucher->getImpTotal()),
-                        $voucher->getDocNro()
+                        Num::format($voucher->total),
+                        $voucher->docNro
                     ), 0, $e);
                 }
-                $vouchers[] = $voucher;
+                $found[] = $voucher;
             }
 
-            if (count($vouchers) !== count($invoices)) {
+            if (count($found) !== count($invoices)) {
                 throw $this->uncertain($first->getPuntoVenta(), $first->getTipoComprobante(), $numbers, $allNotFound, $e);
             }
 
-            $result = AuthorizationResult::fromVouchers(...$vouchers)->markRecovered();
             foreach ($invoices as $i => $invoice) {
-                $invoice->setCae($vouchers[$i]->getCodigoAutorizacion());
-                $invoice->setCaeVencimiento($vouchers[$i]->getVencimiento());
+                $invoice->setCae($found[$i]->cae);
+                $invoice->setCaeVencimiento($found[$i]->vencimiento);
             }
 
-            return $result;
+            return AuthorizationResult::recovered($first->getPuntoVenta(), $first->getTipoComprobante(), ...$found);
         }
     }
 
@@ -659,7 +778,10 @@ final class See
     /**
      * Error 10016 sin ningún comprobante aprobado: el número ya fue usado por otro proceso.
      */
-    private function isNumberingConflict(AuthorizationResult $result): bool
+    /**
+     * @param int[] $codes
+     */
+    private function isNumberingConflict(AuthorizationResult $result, array $codes): bool
     {
         if ($result->getResultado() !== 'R') {
             return false;
@@ -670,13 +792,13 @@ final class See
             }
         }
         foreach ($result->getErrors() as $error) {
-            if ($error->getCode() === 10016) {
+            if (in_array($error->getCode(), $codes, true)) {
                 return true;
             }
         }
         $first = $result->getDetail();
         foreach ($first?->getObservaciones() ?? [] as $obs) {
-            if ($obs->getCode() === 10016) {
+            if (in_array($obs->getCode(), $codes, true)) {
                 return true;
             }
         }
@@ -684,14 +806,14 @@ final class See
         return false;
     }
 
-    private function matches(VoucherInfo $voucher, Invoice $invoice): bool
+    private function matches(FoundVoucher $voucher, Invoice $invoice): bool
     {
         $client = $invoice->getClient();
 
-        return Num::equals($voucher->getImpTotal(), $invoice->getImpTotal(), 0.01)
-            && $voucher->getDocTipo() === $client?->getTipoDoc()
-            && ltrim($voucher->getDocNro(), '0') === ltrim((string) $client?->getNumDoc(), '0')
-            && $voucher->getFecha()?->format('Ymd') === $invoice->getFechaEmision()->format('Ymd');
+        return Num::equals($voucher->total, $invoice->getImpTotal(), 0.01)
+            && $voucher->docTipo === $client?->getTipoDoc()
+            && ltrim($voucher->docNro, '0') === ltrim((string) $client?->getNumDoc(), '0')
+            && $voucher->fecha?->format('Ymd') === $invoice->getFechaEmision()->format('Ymd');
     }
 
     /**
@@ -723,6 +845,58 @@ final class See
         }
     }
 
+    private function recoverBfe(WsbfeService $wsbfe, BonoFiscalInvoice $invoice, TransportException $e): ExportAuthorizationResult
+    {
+        $numbers = [(int) $invoice->getNumero()];
+        if (!$this->autoRecover) {
+            throw $this->uncertain($invoice->getPuntoVenta(), $invoice->getTipoComprobante(), $numbers, false, $e);
+        }
+        [$voucher, $confirmedMissing] = $this->lookup(fn (): ?array => $wsbfe->getVoucher(
+            $invoice->getTipoComprobante(),
+            $invoice->getPuntoVenta(),
+            (int) $invoice->getNumero()
+        ));
+        if ($voucher === null) {
+            throw $this->uncertain($invoice->getPuntoVenta(), $invoice->getTipoComprobante(), $numbers, $confirmedMissing, $e);
+        }
+        $fecha = (string) ($voucher['Fecha_cbte_orig'] ?? $voucher['Fecha_cbte_cae'] ?? '');
+        $matches = Num::equals((float) ($voucher['Imp_total'] ?? -1), $invoice->getImpTotal(), 0.01)
+            && ltrim((string) ($voucher['Nro_doc'] ?? ''), '0') === ltrim((string) $invoice->getClient()?->getNumDoc(), '0')
+            && ($fecha === '' || $fecha === $invoice->getFechaEmision()->format('Ymd'));
+        if (!$matches) {
+            throw new AfipException(sprintf('El número %s ya fue autorizado por ARCA para otro bono fiscal.', $invoice->getNumeroCompleto()), 0, $e);
+        }
+        $result = new ExportAuthorizationResult(
+            'A',
+            trim((string) $voucher['Cae']),
+            Date::fromAfip((string) ($voucher['Fch_venc_Cae'] ?? '')),
+            (int) $invoice->getNumero(),
+            Date::fromAfip($fecha),
+            'S',
+            null,
+            [],
+            [],
+            $voucher
+        );
+        $invoice->setCae($result->getCae());
+        $invoice->setCaeVencimiento($result->getCaeVencimiento());
+
+        return $result->markRecovered();
+    }
+
+    private function releaseBfe(BonoFiscalInvoice $invoice, bool $autoNumber, bool $autoId): void
+    {
+        if ($invoice->isAuthorized()) {
+            return;
+        }
+        if ($autoNumber) {
+            $invoice->setNumero(null);
+        }
+        if ($autoId) {
+            $invoice->setId(null);
+        }
+    }
+
     private function releaseExport(ExportInvoice $invoice, bool $autoNumber, bool $autoId): void
     {
         if ($invoice->isAuthorized()) {
@@ -736,13 +910,12 @@ final class See
         }
     }
 
-    private function checkDateAgainstLast(WsfeService $wsfe, Invoice $invoice, int $last): void
+    private function checkDateAgainstLast(VoucherChannel $channel, Invoice $invoice, int $last): void
     {
         if (!$this->checkLastVoucherDate || $last < 1) {
             return;
         }
-        $previous = $wsfe->getVoucher($invoice->getTipoComprobante(), $invoice->getPuntoVenta(), $last);
-        $fecha = $previous?->getFecha();
+        $fecha = $channel->find($invoice->getTipoComprobante(), $invoice->getPuntoVenta(), $last)?->fecha;
         if ($fecha !== null && Date::diffDays($fecha, $invoice->getFechaEmision()) < 0) {
             $validation = new ValidationResult();
             $validation->error('FECHA_ANTERIOR_ULTIMO', 'fechaEmision', sprintf(
@@ -760,25 +933,28 @@ final class See
      * Verifica que el punto de venta exista, no esté bloqueado ni dado de baja.
      * En homologación ARCA suele devolver la lista vacía: en ese caso no se verifica.
      */
-    private function checkSalesPoint(WsfeService $wsfe, int $puntoVenta): void
+    private function checkSalesPoint(VoucherChannel $channel, int $puntoVenta): void
     {
         if (!$this->verifySalesPoint) {
             return;
         }
-        $this->salesPoints ??= $wsfe->getSalesPoints();
-        if ($this->salesPoints === []) {
-            return;
+        $key = $channel->service()->getServiceName();
+        if (!array_key_exists($key, $this->salesPoints)) {
+            $this->salesPoints[$key] = $channel->salesPoints();
         }
-        $problem = sprintf('El punto de venta %d no está habilitado para web services (FEParamGetPtosVenta).', $puntoVenta);
-        foreach ($this->salesPoints as $point) {
-            if ((int) ($point['Nro'] ?? 0) !== $puntoVenta) {
+        $points = $this->salesPoints[$key];
+        if ($points === null || $points === []) {
+            return; // el servicio no informa puntos de venta (o la tabla está vacía, ej. homologación)
+        }
+        $problem = sprintf('El punto de venta %d no está habilitado para este web service.', $puntoVenta);
+        foreach ($points as $point) {
+            if ($point['numero'] !== $puntoVenta) {
                 continue;
             }
-            $baja = trim((string) ($point['FchBaja'] ?? ''));
-            if (strtoupper((string) ($point['Bloqueado'] ?? 'N')) === 'S') {
+            if ($point['bloqueado']) {
                 $problem = sprintf('El punto de venta %d está bloqueado en ARCA.', $puntoVenta);
-            } elseif ($baja !== '' && strtoupper($baja) !== 'NULL') {
-                $problem = sprintf('El punto de venta %d fue dado de baja el %s.', $puntoVenta, $baja);
+            } elseif ($point['baja'] !== null) {
+                $problem = sprintf('El punto de venta %d fue dado de baja el %s.', $puntoVenta, $point['baja']);
             } else {
                 return;
             }
@@ -860,7 +1036,9 @@ final class See
         $this->wsfex = null;
         $this->padronA5 = null;
         $this->padronA13 = null;
-        $this->salesPoints = null;
+        $this->wsmtxca = null;
+        $this->wsbfe = null;
+        $this->salesPoints = [];
 
         return $this;
     }

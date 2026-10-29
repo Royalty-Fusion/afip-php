@@ -116,6 +116,14 @@ final class MockTransport implements SoapTransportInterface
     }
 
     /**
+     * Respuesta de un servicio Java (WSMTXCA, WSCT, WSFECRED): {operacion}Response con hijos sin namespace.
+     */
+    public static function java(string $namespace, string $operation, string $content): string
+    {
+        return self::envelope(sprintf('<ns1:%1$sResponse xmlns:ns1="%2$s">%3$s</ns1:%1$sResponse>', $operation, $namespace, $content));
+    }
+
+    /**
      * Agrega una respuesta exitosa de WSAA.
      */
     public function withLogin(): self

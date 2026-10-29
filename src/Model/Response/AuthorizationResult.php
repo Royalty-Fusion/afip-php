@@ -100,6 +100,22 @@ final class AuthorizationResult
     }
 
     /**
+     * Resultado aprobado reconstruido con comprobantes recuperados de cualquier servicio.
+     *
+     * @internal
+     */
+    public static function recovered(int $puntoVenta, int $tipo, \RoyaltyFusion\Afip\Emission\FoundVoucher ...$vouchers): self
+    {
+        $details = [];
+        foreach ($vouchers as $v) {
+            $details[] = new CaeDetail('A', $v->cae, $v->vencimiento, $v->numero, $v->numero, $v->fecha, $v->docTipo, $v->docNro, [], $v->raw);
+        }
+
+        return (new self('A', 'S', $puntoVenta, $tipo, null, $details, [], [], ['recuperados' => array_map(static fn ($v): array => $v->raw, $vouchers)]))
+            ->markRecovered();
+    }
+
+    /**
      * @deprecated usar fromVouchers()
      */
     public static function fromVoucher(VoucherInfo $voucher): self

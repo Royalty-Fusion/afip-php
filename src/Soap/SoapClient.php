@@ -52,12 +52,15 @@ final class SoapClient
      * Invoca una operación y devuelve el contenido de su elemento de respuesta.
      *
      * @param array<string, mixed> $params
+     * @param string|null          $requestElement nombre del elemento raíz del request cuando difiere de la
+     *                                             operación (servicios Java: "autorizarComprobanteRequest");
+     *                                             cadena vacía para enviar el Body vacío
      *
      * @return array<string, mixed>
      */
-    public function call(string $operation, array $params): array
+    public function call(string $operation, array $params, ?string $requestElement = null): array
     {
-        $request = $this->buildEnvelope($operation, $params);
+        $request = $this->buildEnvelope($requestElement ?? $operation, $params);
         $this->lastRequest = $request;
         $this->lastResponse = null;
 
@@ -91,6 +94,9 @@ final class SoapClient
         $body = $doc->createElementNS(self::SOAP_ENV_NS, 'soapenv:Body');
         $envelope->appendChild($body);
 
+        if ($operation === '') {
+            return (string) $doc->saveXML();
+        }
         if ($this->qualifiedChildren) {
             $operationElement = $doc->createElementNS($this->namespace, $operation);
             XmlUtil::appendArray($doc, $operationElement, $params, $this->namespace);

@@ -19,15 +19,20 @@ use RoyaltyFusion\Afip\Support\Num;
  *  - ImpTotal = ImpTotConc + ImpNeto + ImpOpEx + ImpTrib + ImpIVA
  *  - Σ AlicIva.BaseImp = ImpNeto y Σ AlicIva.Importe = ImpIVA
  *  - AlicIva.Importe = BaseImp × alícuota (redondeo a 2 decimales)
+ *
+ * Con $porItem = true (requerido por WSMTXCA y WSCT) además calcula el IVA y el importe de
+ * cada ítem, y los subtotales por alícuota se arman como la suma de los ítems.
  */
 final class InvoiceCalculator
 {
-    public function calculate(Invoice $invoice): Invoice
+    public function calculate(Invoice $invoice, bool $porItem = false): Invoice
     {
         $details = $invoice->getDetails();
 
         if ($details !== []) {
-            if (TipoComprobante::sinIva($invoice->getTipoComprobante())) {
+            if ($porItem) {
+                $this->calculateItemized($invoice, $details);
+            } elseif (TipoComprobante::sinIva($invoice->getTipoComprobante())) {
                 $this->calculateWithoutVat($invoice, $details);
             } else {
                 $this->calculateWithVat($invoice, $details);
@@ -76,6 +81,79 @@ final class InvoiceCalculator
         $invoice->setImpExento(0.0);
         $invoice->setImpNoGravado(0.0);
         $invoice->setImpNeto(Num::round($total));
+    }
+
+    /**
+     * Calcula IVA e importe por ítem y arma los subtotales como suma de los ítems.
+     *
+     * @param SaleDetail[] $details
+     */
+    private function calculateItemized(Invoice $invoice, array $details): void
+    {
+        $sinIva = TipoComprobante::sinIva($invoice->getTipoComprobante());
+        /** @var array<int, array{base: float, iva: float}> $groups */
+        $groups = [];
+        $exento = 0.0;
+        $noGravado = 0.0;
+        $neto = 0.0;
+
+        foreach ($details as $index => $detail) {
+            $subtotal = Num::round($detail->getSubtotal());
+            if ($sinIva || $detail->getTratamientoIva() !== SaleDetail::GRAVADO) {
+                $detail->setImporteIva(0.0)->setImporteItem($subtotal);
+                if ($sinIva) {
+                    $neto += $subtotal;
+                } elseif ($detail->getTratamientoIva() === SaleDetail::EXENTO) {
+                    $exento += $subtotal;
+                } else {
+                    $noGravado += $subtotal;
+                }
+                continue;
+            }
+            $id = $detail->getAlicuotaIva();
+            if ($id === null || !AlicuotaIva::exists($id)) {
+                throw new \InvalidArgumentException(sprintf(
+                    'El ítem #%d ("%s") está gravado pero no tiene una alícuota de IVA válida.',
+                    $index + 1,
+                    $detail->getDescripcion()
+                ));
+            }
+            $rate = AlicuotaIva::rate($id) / 100;
+            if ($detail->isPrecioIncluyeIva()) {
+                $gross = $subtotal;
+                $net = Num::round($gross / (1 + $rate));
+                $iva = Num::round($gross - $net);
+            } else {
+                $net = $subtotal;
+                $iva = Num::round($net * $rate);
+                $gross = Num::round($net + $iva);
+            }
+            $detail->setImporteIva($iva)->setImporteItem($gross);
+            $groups[$id] ??= ['base' => 0.0, 'iva' => 0.0];
+            $groups[$id]['base'] += $net;
+            $groups[$id]['iva'] += $iva;
+        }
+
+        ksort($groups);
+        $ivas = [];
+        $totalBase = 0.0;
+        $totalIva = 0.0;
+        foreach ($groups as $id => $group) {
+            $base = Num::round($group['base']);
+            $iva = Num::round($group['iva']);
+            if ($base == 0.0 && $iva == 0.0) {
+                continue;
+            }
+            $ivas[] = new Iva($id, $base, $iva);
+            $totalBase += $base;
+            $totalIva += $iva;
+        }
+
+        $invoice->setIvas($ivas);
+        $invoice->setImpNeto(Num::round($sinIva ? $neto : $totalBase));
+        $invoice->setImpIva(Num::round($totalIva));
+        $invoice->setImpExento(Num::round($exento));
+        $invoice->setImpNoGravado(Num::round($noGravado));
     }
 
     /**

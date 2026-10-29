@@ -30,6 +30,14 @@ class SaleDetail
     private ?int $alicuotaIva = null;
     private string $tratamientoIva = self::GRAVADO;
     private bool $precioIncluyeIva = false;
+    // Campos de WSMTXCA / WSBFE / WSCT
+    private int $codigoUnidadMedida = 7;
+    private ?string $codigoMtx = null;
+    private ?int $unidadesMtx = null;
+    private ?string $codigoNcm = null;
+    private ?string $codigoSecretaria = null;
+    private ?float $importeIva = null;
+    private ?float $importeItem = null;
 
     public function getCodigo(): ?string
     {
@@ -178,6 +186,111 @@ class SaleDetail
     public function setPrecioIncluyeIva(bool $precioIncluyeIva): static
     {
         $this->precioIncluyeIva = $precioIncluyeIva;
+
+        return $this;
+    }
+
+    /**
+     * Código de unidad de medida de ARCA (7 = unidades). Se usa en WSMTXCA y WSBFE.
+     */
+    public function getCodigoUnidadMedida(): int
+    {
+        return $this->codigoUnidadMedida;
+    }
+
+    public function setCodigoUnidadMedida(int $codigoUnidadMedida): static
+    {
+        $this->codigoUnidadMedida = $codigoUnidadMedida;
+
+        return $this;
+    }
+
+    /**
+     * Código de barras / GTIN del producto (WSMTXCA, codigoMtx).
+     */
+    public function getCodigoMtx(): ?string
+    {
+        return $this->codigoMtx;
+    }
+
+    public function setCodigoMtx(?string $codigoMtx): static
+    {
+        $this->codigoMtx = $codigoMtx;
+
+        return $this;
+    }
+
+    /**
+     * Unidades de la presentación referenciada por codigoMtx (WSMTXCA, unidadesMtx).
+     */
+    public function getUnidadesMtx(): ?int
+    {
+        return $this->unidadesMtx;
+    }
+
+    public function setUnidadesMtx(?int $unidadesMtx): static
+    {
+        $this->unidadesMtx = $unidadesMtx;
+
+        return $this;
+    }
+
+    /**
+     * Código NCM del bien (WSBFE, Pro_codigo_ncm).
+     */
+    public function getCodigoNcm(): ?string
+    {
+        return $this->codigoNcm;
+    }
+
+    public function setCodigoNcm(?string $codigoNcm): static
+    {
+        $this->codigoNcm = $codigoNcm;
+
+        return $this;
+    }
+
+    /**
+     * Código de la Secretaría de Industria (WSBFE, Pro_codigo_sec).
+     */
+    public function getCodigoSecretaria(): ?string
+    {
+        return $this->codigoSecretaria;
+    }
+
+    public function setCodigoSecretaria(?string $codigoSecretaria): static
+    {
+        $this->codigoSecretaria = $codigoSecretaria;
+
+        return $this;
+    }
+
+    /**
+     * IVA del ítem (calculado por InvoiceCalculator con detalle por ítem).
+     */
+    public function getImporteIva(): ?float
+    {
+        return $this->importeIva;
+    }
+
+    public function setImporteIva(?float $importeIva): static
+    {
+        $this->importeIva = $importeIva;
+
+        return $this;
+    }
+
+    /**
+     * Importe del ítem con IVA incluido (calculado por InvoiceCalculator con detalle por ítem).
+     */
+    public function getImporteItem(): ?float
+    {
+        return $this->importeItem;
+    }
+
+    public function setImporteItem(?float $importeItem): static
+    {
+        $this->importeItem = $importeItem;
 
         return $this;
     }

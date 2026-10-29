@@ -30,6 +30,12 @@ final class InvoiceValidator
 {
     public const MODE_CAE = 'cae';
     public const MODE_CAEA = 'caea';
+    /** WSMTXCA (detalle de ítems, CAE). */
+    public const MODE_MTXCA = 'mtxca';
+    /** WSMTXCA informando un comprobante emitido con CAEA. */
+    public const MODE_MTXCA_CAEA = 'mtxca_caea';
+    /** WSBFE (bono fiscal electrónico). */
+    public const MODE_BFE = 'bfe';
 
     private const MAX_PTO_VTA = 99998;
     private const MAX_NUMERO = 99999999;
@@ -49,6 +55,7 @@ final class InvoiceValidator
         $r = new ValidationResult();
         $tipo = $invoice->getTipoComprobante();
 
+        $mtxca = in_array($mode, [self::MODE_MTXCA, self::MODE_MTXCA_CAEA], true);
         if (!TipoComprobante::exists($tipo) || !TipoComprobante::isWsfe($tipo)) {
             $r->error('CBTE_TIPO_INVALIDO', 'tipoComprobante', sprintf(
                 'El tipo de comprobante %d no es válido para WSFEv1%s.',
@@ -61,19 +68,27 @@ final class InvoiceValidator
 
         $this->validateHeader($invoice, $r);
         $this->validateEmisor($invoice, $r);
-        $this->validateFechas($invoice, $r, $mode);
+        $this->validateFechas($invoice, $r, in_array($mode, [self::MODE_CAEA, self::MODE_MTXCA_CAEA], true) ? self::MODE_CAEA : self::MODE_CAE);
         $this->validateReceptor($invoice, $r);
         $this->validateImportes($invoice, $r);
-        $this->validateIva($invoice, $r);
+        $this->validateIva($invoice, $r, !$mtxca && $mode !== self::MODE_BFE);
         $this->validateTributos($invoice, $r);
         $this->validateMoneda($invoice, $r);
         $this->validateAsociados($invoice, $r);
-        $this->validateOpcionales($invoice, $r);
-        $this->validateFce($invoice, $r);
         $this->validateCompradores($invoice, $r);
-        $this->validateActividades($invoice, $r);
-        $this->validateDetails($invoice, $r);
-        if ($mode === self::MODE_CAEA) {
+        if ($mtxca) {
+            $this->validateMtxca($invoice, $r);
+        } elseif ($mode === self::MODE_BFE) {
+            $this->validateOpcionales($invoice, $r);
+            $this->validateFce($invoice, $r);
+            $this->validateBfe($invoice, $r);
+        } else {
+            $this->validateOpcionales($invoice, $r);
+            $this->validateFce($invoice, $r);
+            $this->validateActividades($invoice, $r);
+            $this->validateDetails($invoice, $r);
+        }
+        if (in_array($mode, [self::MODE_CAEA, self::MODE_MTXCA_CAEA], true)) {
             $this->validateCaea($invoice, $r);
         }
 
@@ -355,7 +370,7 @@ final class InvoiceValidator
         }
     }
 
-    private function validateIva(Invoice $invoice, ValidationResult $r): void
+    private function validateIva(Invoice $invoice, ValidationResult $r, bool $checkLineAmounts = true): void
     {
         $tol = $this->options->tolerancia;
         $ivas = $invoice->getIvas();
@@ -411,7 +426,7 @@ final class InvoiceValidator
             }
 
             $expected = Num::round($iva->getBaseImp() * AlicuotaIva::rate($iva->getId()) / 100);
-            if (!Num::equals($expected, $iva->getImporte(), $tol)) {
+            if ($checkLineAmounts && !Num::equals($expected, $iva->getImporte(), $tol)) {
                 $r->error('IVA_MAL_CALCULADO', $field . '.importe', sprintf(
                     'El IVA %s sobre %s debe ser %s (informado: %s).',
                     AlicuotaIva::description($iva->getId()),
@@ -746,6 +761,187 @@ final class InvoiceValidator
                 Num::format($copy->getImpTotal()),
                 Num::format($invoice->getImpTotal())
             ));
+        }
+    }
+
+    /**
+     * Reglas propias de WSMTXCA: ítems obligatorios con IVA e importe por ítem, y totales
+     * que coinciden con la suma de los ítems.
+     */
+    private function validateMtxca(Invoice $invoice, ValidationResult $r): void
+    {
+        $tipo = $invoice->getTipoComprobante();
+        $clase = TipoComprobante::clase($tipo);
+        $tol = $this->options->tolerancia;
+
+        if (!in_array($clase, ['A', 'B', 'M'], true) || !in_array(TipoComprobante::nature($tipo), [TipoComprobante::FACTURA, TipoComprobante::NOTA_CREDITO, TipoComprobante::NOTA_DEBITO], true)) {
+            $r->error('MTXCA_TIPO_NO_SOPORTADO', 'tipoComprobante', 'WSMTXCA autoriza facturas y notas de crédito/débito clase A, B y M (incluida FCE). Para otros comprobantes use WSFEv1.');
+        }
+        if ($invoice->getNumeroHasta() !== $invoice->getNumero()) {
+            $r->error('MTXCA_RANGO', 'numeroHasta', 'WSMTXCA autoriza un comprobante por solicitud (sin rangos).');
+        }
+        if ($invoice->getOpcionales() !== []) {
+            $r->error('MTXCA_OPCIONALES', 'opcionales', 'WSMTXCA no admite opcionales: use datos adicionales (setDatosAdicionales).');
+        }
+        if ($invoice->getActividades() !== []) {
+            $r->error('MTXCA_ACTIVIDADES', 'actividades', 'WSMTXCA no admite el detalle de actividades.');
+        }
+        if (mb_strlen((string) $invoice->getObservaciones()) > 2000) {
+            $r->error('MTXCA_OBSERVACIONES', 'observaciones', 'Las observaciones admiten hasta 2000 caracteres.');
+        }
+
+        $this->validateItemized($invoice, $r, 'WSMTXCA');
+
+        // FCE: en WSMTXCA el CBU se informa como dato adicional tipo 21.
+        if (TipoComprobante::isFceFactura($tipo)) {
+            if ($invoice->getFechaVencimientoPago() === null) {
+                $r->error('FCE_VTO_PAGO_REQUERIDO', 'fechaVencimientoPago', 'La Factura de Crédito Electrónica MiPyME debe informar la fecha de vencimiento del pago.');
+            }
+            $cbu = $invoice->getDatoAdicional(21)?->getCampo(1);
+            if ($cbu === null) {
+                $r->error('FCE_CBU_REQUERIDO', 'datosAdicionales', 'La FCE MiPyME en WSMTXCA debe informar el CBU del emisor como dato adicional tipo 21 (c1).');
+            } elseif (!Cbu::isValid($cbu)) {
+                $r->error('FCE_CBU_INVALIDO', 'datosAdicionales', sprintf('El CBU "%s" no es válido.', $cbu));
+            }
+        }
+        if (TipoComprobante::isFce($tipo) && $invoice->getClient() !== null && $invoice->getClient()->getTipoDoc() !== TipoDocumento::CUIT) {
+            $r->error('FCE_RECEPTOR_CUIT', 'client.tipoDoc', 'En Factura de Crédito Electrónica MiPyME el receptor debe identificarse con CUIT.');
+        }
+    }
+
+    /**
+     * Reglas propias de WSBFE (bono fiscal electrónico).
+     */
+    private function validateBfe(Invoice $invoice, ValidationResult $r): void
+    {
+        if ($invoice->getConcepto() !== Concepto::PRODUCTOS) {
+            $r->error('BFE_CONCEPTO', 'concepto', 'El bono fiscal electrónico solo admite bienes (concepto Productos).');
+        }
+        if ($invoice->getNumeroHasta() !== $invoice->getNumero()) {
+            $r->error('BFE_RANGO', 'numeroHasta', 'WSBFE autoriza un comprobante por solicitud (sin rangos).');
+        }
+        if ($invoice instanceof \RoyaltyFusion\Afip\Model\Sale\BonoFiscalInvoice && $invoice->getZona() < 0) {
+            $r->error('BFE_ZONA', 'zona', 'Indique la zona (BFEGetPARAM_Zonas).');
+        }
+        foreach (['compradores' => $invoice->getCompradores(), 'actividades' => $invoice->getActividades(), 'datosAdicionales' => $invoice->getDatosAdicionales()] as $field => $value) {
+            if ($value !== []) {
+                $r->error('BFE_NO_SOPORTADO', $field, sprintf('WSBFE no admite %s.', $field));
+            }
+        }
+        if ($invoice->getPeriodoAsociado() !== null) {
+            $r->error('BFE_NO_SOPORTADO', 'periodoAsociado', 'WSBFE no admite período asociado.');
+        }
+        foreach ($invoice->getTributos() as $i => $tributo) {
+            if (!isset(\RoyaltyFusion\Afip\Service\WsbfeService::TRIBUTOS[$tributo->getId()])) {
+                $r->error('BFE_TRIBUTO', sprintf('tributos[%d].id', $i), sprintf(
+                    'WSBFE solo admite percepciones de IVA, IIBB, municipales e impuestos internos (informado: %s).',
+                    TipoTributo::description($tributo->getId())
+                ));
+            }
+        }
+        foreach ($invoice->getDetails() as $i => $detail) {
+            if (!preg_match('/^\d{4}(\.\d{2}){1,3}$/', (string) $detail->getCodigoNcm())) {
+                $r->error('BFE_NCM', sprintf('details[%d].codigoNcm', $i), 'Cada ítem del bono fiscal debe tener un código NCM válido (ej. 8471.30.12, ver BFEGetPARAM_NCM).');
+            }
+        }
+        $this->validateItemized($invoice, $r, 'WSBFE');
+    }
+
+    /**
+     * Ítems con IVA e importe por ítem, y totales que coinciden con la suma de los ítems
+     * (WSMTXCA, WSBFE, WSCT).
+     */
+    private function validateItemized(Invoice $invoice, ValidationResult $r, string $servicio): void
+    {
+        $tipo = $invoice->getTipoComprobante();
+        $tol = $this->options->tolerancia;
+        $details = $invoice->getDetails();
+        if ($details === []) {
+            $r->error('ITEMS_REQUERIDOS', 'details', sprintf('%s requiere el detalle de ítems del comprobante.', $servicio));
+
+            return;
+        }
+
+        $neto = 0.0;
+        $exento = 0.0;
+        $noGravado = 0.0;
+        $ivaPorAlicuota = [];
+        foreach ($details as $i => $detail) {
+            $field = sprintf('details[%d]', $i);
+            if (trim($detail->getDescripcion()) === '') {
+                $r->error('ITEM_DESCRIPCION', $field . '.descripcion', 'El ítem debe tener descripción.');
+            } elseif (mb_strlen($detail->getDescripcion()) > 4000) {
+                $r->error('ITEM_DESCRIPCION_LARGA', $field . '.descripcion', 'La descripción del ítem admite hasta 4000 caracteres.');
+            }
+            if ($detail->getCantidad() <= 0 || $detail->getPrecioUnitario() < 0) {
+                $r->error('ITEM_CANTIDAD', $field, 'La cantidad debe ser mayor a 0 y el precio no puede ser negativo.');
+            }
+            if ($detail->getCodigoUnidadMedida() < 0) {
+                $r->error('ITEM_UNIDAD', $field . '.codigoUnidadMedida', 'Indique la unidad de medida del ítem (consultarUnidadesMedida).');
+            }
+            if ($detail->getTratamientoIva() === 'gravado' && ($detail->getAlicuotaIva() === null || !AlicuotaIva::exists($detail->getAlicuotaIva()))) {
+                $r->error('ITEM_ALICUOTA', $field . '.alicuotaIva', 'El ítem gravado debe indicar una alícuota de IVA válida.');
+                continue;
+            }
+            if ($detail->getImporteItem() === null || $detail->getImporteIva() === null) {
+                $r->error('ITEM_IMPORTES', $field, 'Falta el IVA/importe del ítem: calcule con InvoiceCalculator::calculate($invoice, true).');
+                continue;
+            }
+            $item = $detail->getImporteItem();
+            $iva = $detail->getImporteIva();
+            if (Num::decimals($item) > 2 || Num::decimals($iva) > 2) {
+                $r->error('IMPORTE_DECIMALES', $field, 'Los importes del ítem admiten como máximo 2 decimales.');
+            }
+            switch ($detail->getTratamientoIva()) {
+                case 'exento':
+                    $exento += $item;
+                    break;
+                case 'no_gravado':
+                    $noGravado += $item;
+                    break;
+                default:
+                    $id = (int) $detail->getAlicuotaIva();
+                    $expected = Num::round(($item - $iva) * AlicuotaIva::rate($id) / 100);
+                    if (!Num::equals($expected, $iva, $tol)) {
+                        $r->error('ITEM_IVA_MAL_CALCULADO', $field . '.importeIva', sprintf(
+                            'El IVA del ítem (%s) no corresponde a la alícuota %s (esperado %s).',
+                            Num::format($iva),
+                            AlicuotaIva::description($id),
+                            Num::format($expected)
+                        ));
+                    }
+                    $neto += $item - $iva;
+                    $ivaPorAlicuota[$id] = ($ivaPorAlicuota[$id] ?? 0.0) + $iva;
+            }
+        }
+
+        foreach ($invoice->getIvas() as $iva) {
+            $suma = $ivaPorAlicuota[$iva->getId()] ?? 0.0;
+            if (!Num::equals($suma, $iva->getImporte(), $tol)) {
+                $r->error('SUBTOTAL_IVA_ITEMS', 'ivas', sprintf(
+                    'El subtotal de IVA %s (%s) debe ser igual a la suma del IVA de los ítems (%s).',
+                    AlicuotaIva::description($iva->getId()),
+                    Num::format($iva->getImporte()),
+                    Num::format($suma)
+                ));
+            }
+            unset($ivaPorAlicuota[$iva->getId()]);
+        }
+        foreach ($ivaPorAlicuota as $id => $suma) {
+            if ($suma != 0.0) {
+                $r->error('SUBTOTAL_IVA_ITEMS', 'ivas', sprintf('Falta el subtotal de IVA %s de los ítems.', AlicuotaIva::description($id)));
+            }
+        }
+        if (!TipoComprobante::sinIva($tipo)) {
+            foreach (['impNeto' => [$neto, $invoice->getImpNeto()], 'impExento' => [$exento, $invoice->getImpExento()], 'impNoGravado' => [$noGravado, $invoice->getImpNoGravado()]] as $field => [$items, $total]) {
+                if (!Num::equals($items, $total, $tol)) {
+                    $r->error('ITEMS_NO_CUADRAN', $field, sprintf(
+                        'La suma de los ítems (%s) no coincide con el importe del comprobante (%s). Use InvoiceCalculator con detalle por ítem.',
+                        Num::format($items),
+                        Num::format($total)
+                    ));
+                }
+            }
         }
     }
 

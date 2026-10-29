@@ -17,6 +17,11 @@ final class Endpoints
     public const WSFEX = 'wsfex';
     public const PADRON_A5 = 'ws_sr_constancia_inscripcion';
     public const PADRON_A13 = 'ws_sr_padron_a13';
+    public const WSMTXCA = 'wsmtxca';
+    public const WSBFE = 'wsbfe';
+    public const WSCT = 'wsct';
+    public const WSFECRED = 'wsfecred';
+    public const WSCDC = 'wscdc';
 
     /** @var array<string, array<string, string>> */
     private const DEFAULTS = [
@@ -39,6 +44,26 @@ final class Endpoints
         self::PADRON_A13 => [
             'homologacion' => 'https://awshomo.afip.gov.ar/sr-padron/webservices/personaServiceA13',
             'produccion' => 'https://aws.afip.gov.ar/sr-padron/webservices/personaServiceA13',
+        ],
+        self::WSMTXCA => [
+            'homologacion' => 'https://fwshomo.afip.gov.ar/wsmtxca/services/MTXCAService',
+            'produccion' => 'https://serviciosjava.afip.gob.ar/wsmtxca/services/MTXCAService',
+        ],
+        self::WSBFE => [
+            'homologacion' => 'https://wswhomo.afip.gov.ar/wsbfev1/service.asmx',
+            'produccion' => 'https://servicios1.afip.gov.ar/wsbfev1/service.asmx',
+        ],
+        self::WSCT => [
+            'homologacion' => 'https://fwshomo.afip.gov.ar/wsct/CTService',
+            'produccion' => 'https://serviciosjava.afip.gob.ar/wsct/CTService',
+        ],
+        self::WSFECRED => [
+            'homologacion' => 'https://fwshomo.afip.gov.ar/wsfecred/FECredService',
+            'produccion' => 'https://serviciosjava.afip.gob.ar/wsfecred/FECredService',
+        ],
+        self::WSCDC => [
+            'homologacion' => 'https://wswhomo.afip.gov.ar/WSCDC/service.asmx',
+            'produccion' => 'https://servicios1.afip.gov.ar/WSCDC/service.asmx',
         ],
     ];
 
