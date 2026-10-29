@@ -48,7 +48,8 @@ final class WsfecredWscdcTest extends TestCase
         ]);
         self::assertTrue($accept->isSuccess());
         $body = $transport->requestsFor('aceptarFECredRequest')[0]['body'];
-        self::assertStringContainsString('<idCtaCte><codCtaCte>2561</codCtaCte><idFactura><CUITEmisor>30500010912</CUITEmisor><codTipoCmp>201</codTipoCmp><ptoVta>1</ptoVta><nroCmp>15</nroCmp></idFactura></idCtaCte>', $body);
+        // IdCtaCte es un xsd:choice: se envía el código de cuenta corriente (o la factura), nunca ambos.
+        self::assertStringContainsString('<idCtaCte><codCtaCte>2561</codCtaCte></idCtaCte>', $body);
         self::assertStringContainsString('<arrayFormasCancelacion><codigoDescripcion><codigo>1</codigo><descripcion>Transferencia</descripcion></codigoDescripcion></arrayFormasCancelacion>', $body);
         self::assertStringContainsString('<saldoAceptado>121000.00</saldoAceptado><codMoneda>PES</codMoneda><cotizacionMonedaUlt>1</cotizacionMonedaUlt>', $body);
 
@@ -56,6 +57,13 @@ final class WsfecredWscdcTest extends TestCase
         self::assertFalse($reject->isSuccess());
         self::assertTrue($reject->hasCode(1100));
         self::assertStringContainsString('<motivoRechazo><codMotivo>1</codMotivo><descMotivo>Falta de entrega</descMotivo><justificacion>Mercadería no recibida</justificacion></motivoRechazo>', $transport->requestsFor('rechazarFECredRequest')[0]['body']);
+
+        $porFactura = WsfecredService::cuentaCorriente(null, WsfecredService::comprobante('30500010912', 201, 1, 15));
+        $wsfecred->reject($porFactura, [['codMotivo' => 1, 'descMotivo' => 'Falta de entrega', 'justificacion' => 'No recibida']]);
+        self::assertStringContainsString('<idCtaCte><idFactura><CUITEmisor>30500010912</CUITEmisor><codTipoCmp>201</codTipoCmp><ptoVta>1</ptoVta><nroCmp>15</nroCmp></idFactura></idCtaCte>', $transport->requestsFor('rechazarFECredRequest')[1]['body']);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $wsfecred->reject($id, [['codMotivo' => 1, 'descMotivo' => 'x', 'justificacion' => 'y']]);
     }
 
     public function testVerifySupplierVoucher(): void

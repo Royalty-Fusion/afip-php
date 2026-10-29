@@ -63,15 +63,20 @@ class WsfecredService extends AbstractJavaService
     }
 
     /**
-     * Identificador de la cuenta corriente de una FCE.
+     * Identificador de la cuenta corriente de una FCE: por código de cuenta corriente o por
+     * la factura (ARCA admite uno u otro; si se indican ambos se usa el código).
      *
-     * @param array{CUITEmisor: string, codTipoCmp: int, ptoVta: int, nroCmp: int} $factura
+     * @param array{CUITEmisor: string, codTipoCmp: int, ptoVta: int, nroCmp: int}|null $factura
      *
-     * @return array{codCtaCte: int, idFactura: array<string, mixed>}
+     * @return array{codCtaCte?: int, idFactura?: array<string, mixed>}
      */
-    public static function cuentaCorriente(int $codCtaCte, array $factura): array
+    public static function cuentaCorriente(?int $codCtaCte, ?array $factura = null): array
     {
-        return ['codCtaCte' => $codCtaCte, 'idFactura' => $factura];
+        if (($codCtaCte === null || $codCtaCte <= 0) && $factura === null) {
+            throw new \InvalidArgumentException('Indique el código de cuenta corriente o la factura.');
+        }
+
+        return array_filter(['codCtaCte' => $codCtaCte, 'idFactura' => $factura], static fn ($v): bool => $v !== null && $v !== 0);
     }
 
     /**
@@ -234,7 +239,7 @@ class WsfecredService extends AbstractJavaService
                 'codTipo' => $ret['codTipo'],
                 'importe' => Num::format($ret['importe']),
                 'porcentaje' => Num::format($ret['porcentaje']),
-                'descMotivo' => $ret['descMotivo'] ?? null,
+                'descMotivo' => isset($ret['descMotivo']) ? self::texto250($ret['descMotivo'], 'descMotivo') : null,
             ], $opciones['retenciones'])] : null,
             'arrayAjustesOperacion' => isset($opciones['ajustes']) ? ['ajuste' => array_map(static fn (array $a): array => [
                 'codigo' => $a['codigo'],
@@ -357,7 +362,25 @@ class WsfecredService extends AbstractJavaService
      */
     private static function idCtaCte(array $id): array
     {
-        return ['codCtaCte' => (int) ($id['codCtaCte'] ?? 0), 'idFactura' => self::idComprobante((array) ($id['idFactura'] ?? []))];
+        // xsd:choice: código de cuenta corriente O identificación de la factura.
+        if ((int) ($id['codCtaCte'] ?? 0) > 0) {
+            return ['codCtaCte' => (int) $id['codCtaCte']];
+        }
+        if (!isset($id['idFactura'])) {
+            throw new \InvalidArgumentException('Indique el código de cuenta corriente o la factura.');
+        }
+
+        return ['idFactura' => self::idComprobante((array) $id['idFactura'])];
+    }
+
+    private static function texto250(string $value, string $campo): string
+    {
+        $len = mb_strlen(trim($value));
+        if ($len < 3 || $len > 250) {
+            throw new \InvalidArgumentException(sprintf('El campo %s debe tener entre 3 y 250 caracteres.', $campo));
+        }
+
+        return $value;
     }
 
     /**
@@ -377,6 +400,18 @@ class WsfecredService extends AbstractJavaService
      */
     private static function motivos(array $motivos): array
     {
+        if ($motivos === []) {
+            throw new \InvalidArgumentException('Debe indicar al menos un motivo de rechazo.');
+        }
+        foreach ($motivos as $m) {
+            foreach (['descMotivo', 'justificacion'] as $campo) {
+                $len = mb_strlen(trim((string) ($m[$campo] ?? '')));
+                if ($len < 3 || $len > 250) {
+                    throw new \InvalidArgumentException(sprintf('El campo %s del motivo de rechazo debe tener entre 3 y 250 caracteres.', $campo));
+                }
+            }
+        }
+
         return array_map(static fn (array $m): array => [
             'codMotivo' => (int) $m['codMotivo'],
             'descMotivo' => (string) ($m['descMotivo'] ?? ''),

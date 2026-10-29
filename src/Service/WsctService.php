@@ -248,9 +248,14 @@ class WsctService extends AbstractJavaService
         return $this->param('consultarRelacionEmisorReceptor', 'arrayRelacionesEmisorReceptor.codigoDescripcion');
     }
 
-    public function getQuotation(string $moneda): float
+    public function getQuotation(string $moneda, ?\DateTimeInterface $fecha = null): float
     {
-        $r = $this->ret('consultarCotizacion', static fn (array $auth): array => ['authRequest' => $auth, 'codigoMoneda' => $moneda]);
+        $fecha ??= Date::today();
+        $r = $this->ret('consultarCotizacion', static fn (array $auth): array => [
+            'authRequest' => $auth,
+            'codigoMoneda' => $moneda,
+            'fechaCotizacion' => $fecha->format('Y-m-d'),
+        ]);
         self::throwIfErrors('consultarCotizacion', self::codigos($r, 'arrayErrores.codigoDescripcion'));
 
         return (float) Arr::float($r, 'cotizacionMoneda', 0.0);
