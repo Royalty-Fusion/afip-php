@@ -1,0 +1,49 @@
+{
+    "name": "royalty-fusion/afip-php",
+    "description": "SDK de Facturación Electrónica para Argentina (ARCA, ex-AFIP): WSAA, WSFEv1, WSFEXv1, Padrón A5/A13, CAEA, validaciones previas, QR (RG 4291) y representación impresa.",
+    "type": "library",
+    "keywords": [
+        "afip",
+        "arca",
+        "factura electronica",
+        "wsfe",
+        "wsfev1",
+        "wsfex",
+        "wsaa",
+        "argentina",
+        "cae",
+        "caea",
+        "padron"
+    ],
+    "license": "proprietary",
+    "require": {
+        "php": ">=8.1",
+        "ext-curl": "*",
+        "ext-dom": "*",
+        "ext-json": "*",
+        "ext-libxml": "*",
+        "ext-mbstring": "*",
+        "ext-openssl": "*"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.5"
+    },
+    "suggest": {
+        "dompdf/dompdf": "Para generar el PDF de la representación impresa (PdfReport).",
+        "chillerlan/php-qrcode": "Para generar la imagen del código QR (RG 4291) en la representación impresa."
+    },
+    "autoload": {
+        "psr-4": {
+            "RoyaltyFusion\\Afip\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "RoyaltyFusion\\Afip\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "stable"
+}

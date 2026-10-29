@@ -1,0 +1,11 @@
+/vendor/
+/composer.lock
+/.phpunit.cache/
+/.phpunit.result.cache
+/var/
+*.key
+*.pem
+*.p12
+*.pfx
+/examples/factura.html
+/examples/factura.pdf
