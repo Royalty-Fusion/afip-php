@@ -18,7 +18,7 @@ Los montos y plazos normativos (tope de consumidor final, días de tolerancia, e
 | `CAEA_FECHA_GENERACION` | error | `fechaHoraGeneracion` | Debe informar la fecha y hora de generación del comprobante emitido con CAEA. |  |
 | `CAEA_INVALIDO` | error | `caea` | Debe informar el CAEA (14 dígitos) con el que se emitió el comprobante. |  |
 | `CAEA_NUMERO` | error | `numero` | Los comprobantes emitidos con CAEA deben tener número asignado. |  |
-| `CAN_MIS_MON_EXT_NO_CORRESPONDE` | error | `pagoMismaMoneda` | El indicador de cancelación en misma moneda extranjera (CanMisMonExt) solo se informa en comprobantes en moneda extranjera. |  |
+| `CAN_MIS_MON_EXT_NO_CORRESPONDE` | warning | `pagoMismaMoneda` | El indicador de cancelación en misma moneda extranjera (CanMisMonExt) solo aplica a moneda extranjera; no se enviará. |  |
 | `CAN_MIS_MON_EXT_NO_INFORMADO` | warning | `pagoMismaMoneda` | No se indicó si el comprobante se cancela en la misma moneda extranjera (CanMisMonExt); se enviará "N". |  |
 | `CBTE_ASOC_CLASE` | error | `[i].tipo` | Una … solo puede asociar comprobantes de la misma clase… (informado: …). | 10042 |
 | `CBTE_ASOC_CUIT` | error | `[i].cuit` | El CUIT del comprobante asociado "…" no es válido. |  |
@@ -71,7 +71,6 @@ Los montos y plazos normativos (tope de consumidor final, días de tolerancia, e
 | `IMPORTE_DECIMALES` | error | `[i]` | Los importes admiten como máximo 2 decimales. Redondee o use InvoiceCalculator. |  |
 | `IMPORTE_EXCEDIDO` | error | `[i]` | El importe supera el máximo admitido (13 enteros y 2 decimales). |  |
 | `IMPORTE_NEGATIVO` | error | `[i]` | El importe no puede ser negativo. | 10047 |
-| `ITEMS_NO_CUADRAN` | error | `details` | Los importes del comprobante no coinciden con sus ítems (total según ítems: …, informado: …). Use InvoiceCalculator para calcularlos. |  |
 | `ITEM_ALICUOTA` | error | `[i].alicuotaIva` | El ítem gravado debe indicar una alícuota de IVA válida. |  |
 | `ITEM_CANTIDAD` | error | `[i].cantidad` | La cantidad del ítem debe ser mayor a 0. |  |
 | `ITEM_DESCRIPCION` | error | `[i].descripcion` | El ítem debe tener descripción. |  |
@@ -128,7 +127,7 @@ Los montos y plazos normativos (tope de consumidor final, días de tolerancia, e
 
 | Código | Nivel | Campo | Descripción | ARCA |
 |---|---|---|---|---|
-| `CAN_MIS_MON_EXT_NO_CORRESPONDE` | error | `pagoMismaMoneda` | CanMisMonExt no se informa si la moneda es PES. |  |
+| `CAN_MIS_MON_EXT_NO_CORRESPONDE` | warning | `pagoMismaMoneda` | CanMisMonExt no se informa si la moneda es PES; no se enviará. |  |
 | `CBTE_ASOC_CUIT` | error | `[i].cuit` | El CUIT del comprobante asociado no es válido. |  |
 | `CBTE_ASOC_NUMERO` | error | `[i]` | El punto de venta y número del comprobante asociado deben ser mayores a 0. |  |
 | `CBTE_ASOC_REQUERIDO` | error | `cbtesAsociados` | Las notas de crédito/débito de exportación deben informar el comprobante asociado. |  |

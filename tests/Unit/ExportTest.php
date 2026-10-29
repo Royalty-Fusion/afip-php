@@ -67,7 +67,7 @@ final class ExportTest extends TestCase
         $note = self::invoice()->setTipoComprobante(TipoComprobante::NOTA_CREDITO_EXPORTACION)->setPermisoExistente(null);
         $codes = array_map(static fn ($e): string => $e->getCode(), (new ExportInvoiceValidator())->validate($note)->getErrors());
         self::assertContains('CBTE_ASOC_REQUERIDO', $codes);
-        self::assertContains('CAN_MIS_MON_EXT_NO_CORRESPONDE', $codes);
+        self::assertTrue((new ExportInvoiceValidator())->validate($note)->hasCode('CAN_MIS_MON_EXT_NO_CORRESPONDE'));
     }
 
     public function testSendExport(): void

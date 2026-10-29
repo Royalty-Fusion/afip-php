@@ -46,6 +46,9 @@ final class HtmlReport
         if ($company === null) {
             throw new \InvalidArgumentException('El comprobante debe tener los datos del emisor (setCompany) para imprimirse.');
         }
+        if (!\RoyaltyFusion\Afip\Support\Cuit::isValid($company->getCuit())) {
+            throw new \InvalidArgumentException('El emisor debe tener un CUIT válido para generar el QR y la representación impresa.');
+        }
 
         $data = $invoice instanceof Invoice ? $this->invoiceData($invoice, $params) : $this->exportData($invoice);
         $data['company'] = $company;

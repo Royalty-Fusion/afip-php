@@ -36,6 +36,11 @@ final class ValidatorOptions
         public bool $catalogosEstrictos = false,
         /** Exigir los datos del receptor (nombre y domicilio) en clases A y M. */
         public bool $exigirDatosReceptorA = false,
+        /**
+         * Tratar como error (y no advertencia) que los importes no coincidan con los ítems.
+         * ARCA no recibe los ítems, pero la representación impresa los muestra.
+         */
+        public bool $itemsEstrictos = false,
     ) {
     }
 }

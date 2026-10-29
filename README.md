@@ -177,7 +177,7 @@ El listado completo de reglas, con su código y el error equivalente de ARCA, es
   - La factura exige vencimiento de pago, CBU (2101) válido y transferencia SCA/ADC (27).
   - Las notas exigen anulación (22), un comprobante asociado con CUIT y fecha, y no llevan vencimiento.
 - **Emisor:** un monotributista o un exento no puede emitir A/B/M.
-- **Ítems:** si se cargaron, los importes del comprobante tienen que coincidir con ellos.
+- **Ítems:** si se cargaron, se avisa cuando los importes del comprobante no coinciden con ellos. Es una advertencia, o un error con `itemsEstrictos`.
 
 Los parámetros normativos se configuran con `ValidatorOptions`. Así, si ARCA cambia un monto o
 un plazo, no hace falta actualizar el SDK:
@@ -190,18 +190,20 @@ $see->setValidatorOptions(new ValidatorOptions(
     tolerancia: 0.01,
     requiereCondicionIvaReceptor: true,
     catalogosEstrictos: false,
+    itemsEstrictos: false,
 ));
 ```
 
 ## Integración con el ERP
 
 - **Numeración:** si el comprobante no tiene número, `send()` consulta el último autorizado y usa el siguiente. Con `setCacheDirectory()`, la numeración queda bloqueada entre procesos con `flock`. Si ARCA responde 10016 porque otro proceso tomó el número, el SDK renumera y reintenta (`setNumberingRetries()`).
-- **Caídas y timeouts:** ante un error de comunicación, el SDK consulta el comprobante con `FECompConsultar`.
+- **Caídas y timeouts:** ante un error de comunicación, el SDK consulta el comprobante con `FECompConsultar`, con reintentos (`setRecoveryPolicy()`).
   - Si ARCA lo autorizó con los mismos datos, devuelve el CAE (`$result->isRecovered()`).
-  - Si no existe, relanza `TransportException` y el comprobante se puede reenviar sin riesgo de duplicarlo.
+  - Si no lo puede confirmar, lanza `UncertainAuthorizationException`. El comprobante **conserva su número** (`getNumeros()`): reenviá el mismo objeto. Si ARCA ya lo había autorizado, responde con el mismo CAE (reproceso). Nunca generes un comprobante nuevo con otro número para la misma venta.
   - Si el número figura autorizado con otros datos, lo informa.
+- **Rechazos:** si ARCA rechaza un comprobante numerado automáticamente, el número se libera (`getNumero()` vuelve a `null`) para corregirlo y reenviarlo. En un lote parcialmente aprobado, los aprobados conservan su número y su CAE, y el lote no se reenvía.
 - **Auditoría:** `$result->getRequestXml()` y `getResponseXml()` devuelven los XML enviados y recibidos para guardarlos junto al comprobante. Con `$see->setLogger(fn ($op, $req, $res, $err) => ...)` se registran todas las llamadas.
-- **Tickets de acceso:** usá `setCacheDirectory()`, `FileTicketStorage` o `CacheTicketStorage`, que acepta Redis o cualquier caché PSR-16. Si el TA no se persiste, ARCA rechaza el login siguiente con `coe.alreadyAuthenticated`.
+- **Tickets de acceso:** por defecto se guardan, junto con los bloqueos, en el directorio temporal del sistema (`afip-php-<uid>`). En producción usá `setCacheDirectory()` con una ruta persistente, o `CacheTicketStorage`, que acepta Redis o cualquier caché PSR-16, si hay varios servidores. Si el TA no se comparte entre procesos, ARCA rechaza el login siguiente con `coe.alreadyAuthenticated`.
 - **Contingencia:** con CAEA se pide el código por quincena (`requestCaea`), se emite offline y después se informa con `$see->informCaea($invoices)`.
 - **Clientes:** `$see->getPadronA5()->getPersona($cuit)?->toClient()` arma el receptor con la razón social, el domicilio y la condición frente al IVA.
 - **Endpoints:** `$see->setEndpoint(Endpoints::WSFE, $url)` cambia la URL de un servicio, por ejemplo para un simulador o si ARCA migra de dominio.
@@ -235,7 +237,8 @@ Todas las excepciones extienden `RoyaltyFusion\Afip\Exception\AfipException`.
 | Excepción | Cuándo |
 |---|---|
 | `ValidationException` | El comprobante no pasó la validación local y no se envió. |
-| `TransportException` | Error de red, TLS o HTTP. Al autorizar, el SDK ya intentó recuperar el resultado. |
+| `UncertainAuthorizationException` | Falló la comunicación al autorizar y no se pudo confirmar el resultado. Hay que reenviar el mismo comprobante con el mismo número. Extiende `TransportException`. |
+| `TransportException` | Error de red, TLS o HTTP antes de enviar el comprobante. |
 | `WsaaException` | El login falló: certificado sin relación con el servicio, reloj desfasado, `coe.alreadyAuthenticated`… |
 | `CertificateException` | El certificado o la clave son inválidos, están vencidos o no se corresponden. |
 | `ServiceException` | ARCA devolvió `Errors` en una consulta o parámetro. Expone `getErrors()`. |

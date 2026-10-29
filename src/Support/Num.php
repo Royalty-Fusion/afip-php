@@ -47,14 +47,22 @@ final class Num
     }
 
     /**
-     * Cantidad de decimales significativos de un valor.
+     * Cantidad de decimales significativos de un valor (máx. 10), tolerando el ruido de
+     * la representación binaria (ej. 12345678.91 tiene 2 decimales, no 10).
      */
     public static function decimals(float $value): int
     {
-        $s = self::formatCompact($value, 10);
-        $pos = strpos($s, '.');
+        if (!is_finite($value)) {
+            return 0;
+        }
+        for ($d = 0; $d <= 10; $d++) {
+            $scaled = $value * (10 ** $d);
+            if (abs($scaled - round($scaled)) <= max(1e-7, 1e-14 * abs($scaled))) {
+                return $d;
+            }
+        }
 
-        return $pos === false ? 0 : strlen($s) - $pos - 1;
+        return 10;
     }
 
     /**

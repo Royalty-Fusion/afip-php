@@ -114,7 +114,7 @@ final class ExportInvoiceValidator
                 $r->error('COTIZACION_INVALIDA', 'cotizacion', 'Para moneda PES la cotización debe ser 1.');
             }
             if ($invoice->getPagoMismaMoneda() !== null) {
-                $r->error('CAN_MIS_MON_EXT_NO_CORRESPONDE', 'pagoMismaMoneda', 'CanMisMonExt no se informa si la moneda es PES.');
+                $r->warning('CAN_MIS_MON_EXT_NO_CORRESPONDE', 'pagoMismaMoneda', 'CanMisMonExt no se informa si la moneda es PES; no se enviará.');
             }
         } else {
             if (!($invoice->getCotizacion() > 0)) {
@@ -123,7 +123,7 @@ final class ExportInvoiceValidator
                 $r->error('COTIZACION_DECIMALES', 'cotizacion', 'La cotización admite como máximo 6 decimales.');
             }
             if (!$isFactura && $invoice->getPagoMismaMoneda() !== null) {
-                $r->error('CAN_MIS_MON_EXT_NO_CORRESPONDE', 'pagoMismaMoneda', 'CanMisMonExt no se informa en notas de crédito/débito de exportación.');
+                $r->warning('CAN_MIS_MON_EXT_NO_CORRESPONDE', 'pagoMismaMoneda', 'CanMisMonExt no se informa en notas de crédito/débito de exportación; no se enviará.');
             }
         }
 

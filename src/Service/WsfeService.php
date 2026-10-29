@@ -11,7 +11,6 @@ use RoyaltyFusion\Afip\Catalog\Moneda;
 use RoyaltyFusion\Afip\Endpoints;
 use RoyaltyFusion\Afip\Environment;
 use RoyaltyFusion\Afip\Exception\AfipException;
-use RoyaltyFusion\Afip\Exception\ServiceException;
 use RoyaltyFusion\Afip\Model\Response\AuthorizationResult;
 use RoyaltyFusion\Afip\Model\Response\CaeaInfo;
 use RoyaltyFusion\Afip\Model\Response\VoucherInfo;
@@ -334,7 +333,8 @@ class WsfeService extends AbstractService
     }
 
     /**
-     * Cotización oficial de una moneda (opcionalmente a una fecha).
+     * Cotización oficial de una moneda. La fecha (FchCotiz) es un parámetro agregado en
+     * WSFEv1 4.x (RG 5616); si no se indica, no se envía y ARCA devuelve la cotización vigente.
      *
      * @return array{moneda: string, cotizacion: float, fecha: ?\DateTimeImmutable}
      */
@@ -505,7 +505,13 @@ class WsfeService extends AbstractService
     private function param(string $operation, array $extra = []): array
     {
         $result = $this->request($operation, static fn (array $auth): array => ['Auth' => $auth] + $extra);
-        self::throwIfErrors($operation, self::messages($result, 'Errors.Err'));
+        $errors = self::messages($result, 'Errors.Err');
+        foreach ($errors as $error) {
+            if ($error->getCode() === self::ERROR_SIN_RESULTADOS) {
+                return []; // 602 "Sin Resultados": la tabla está vacía (ej. puntos de venta en homologación)
+            }
+        }
+        self::throwIfErrors($operation, $errors);
         $resultGet = Arr::get($result, 'ResultGet');
         if (!is_array($resultGet) || $resultGet === []) {
             return [];

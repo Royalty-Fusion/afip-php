@@ -277,7 +277,7 @@ class WsfexService extends AbstractService
             'Cliente' => $invoice->getCliente(),
             'Cuit_pais_cliente' => $invoice->getCuitPaisCliente() !== null && $invoice->getCuitPaisCliente() !== ''
                 ? preg_replace('/\D/', '', $invoice->getCuitPaisCliente())
-                : null,
+                : '0', // minOccurs=1 en el WSDL: 0 cuando solo se informa Id_impositivo
             'Domicilio_cliente' => $invoice->getDomicilioCliente(),
             'Id_impositivo' => $invoice->getIdImpositivo(),
             'Moneda_Id' => $moneda,

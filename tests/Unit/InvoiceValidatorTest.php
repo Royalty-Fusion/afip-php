@@ -247,7 +247,9 @@ final class InvoiceValidatorTest extends TestCase
         self::assertHasError($this->validator->validate($invoice), 'COTIZACION_INVALIDA');
 
         $invoice = Factory::facturaA()->setPagoMismaMoneda(false);
-        self::assertHasError($this->validator->validate($invoice), 'CAN_MIS_MON_EXT_NO_CORRESPONDE');
+        $result = $this->validator->validate($invoice);
+        self::assertValid($result);
+        self::assertTrue($result->hasCode('CAN_MIS_MON_EXT_NO_CORRESPONDE'));
 
         $invoice = Factory::facturaA()->setMoneda('X$');
         self::assertHasError($this->validator->validate($invoice), 'MONEDA_INVALIDA');
@@ -277,7 +279,21 @@ final class InvoiceValidatorTest extends TestCase
     public function testItemsMustMatchAmounts(): void
     {
         $invoice = Factory::facturaA()->addDetail(Factory::detail('Extra', 1, 10));
-        self::assertHasError($this->validator->validate($invoice), 'ITEMS_NO_CUADRAN');
+        $result = $this->validator->validate($invoice);
+        self::assertValid($result);
+        self::assertTrue($result->hasCode('ITEMS_NO_CUADRAN'));
+
+        $strict = new InvoiceValidator(new ValidatorOptions(itemsEstrictos: true));
+        self::assertHasError($strict->validate($invoice), 'ITEMS_NO_CUADRAN');
+    }
+
+    public function testLargeAmountsAreNotFlaggedAsDecimals(): void
+    {
+        foreach ([1_234_567.89, 12_345_678.91, 987_654_321.07, 45_999_999.99] as $price) {
+            $invoice = Factory::facturaA()->setDetails([Factory::detail('Item', 1, $price)]);
+            (new InvoiceCalculator())->calculate($invoice);
+            self::assertValid($this->validator->validate($invoice));
+        }
     }
 
     public function testMoreThanTwoDecimals(): void

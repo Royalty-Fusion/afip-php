@@ -7,17 +7,18 @@ namespace RoyaltyFusion\Afip;
 use RoyaltyFusion\Afip\Auth\AuthManager;
 use RoyaltyFusion\Afip\Auth\Certificate;
 use RoyaltyFusion\Afip\Auth\FileTicketStorage;
-use RoyaltyFusion\Afip\Auth\MemoryTicketStorage;
 use RoyaltyFusion\Afip\Auth\TicketStorageInterface;
 use RoyaltyFusion\Afip\Auth\Wsaa;
 use RoyaltyFusion\Afip\Exception\AfipException;
 use RoyaltyFusion\Afip\Exception\TransportException;
+use RoyaltyFusion\Afip\Exception\UncertainAuthorizationException;
 use RoyaltyFusion\Afip\Exception\ValidationException;
 use RoyaltyFusion\Afip\Model\Export\ExportInvoice;
 use RoyaltyFusion\Afip\Model\Response\AuthorizationResult;
 use RoyaltyFusion\Afip\Model\Response\ExportAuthorizationResult;
 use RoyaltyFusion\Afip\Model\Response\VoucherInfo;
 use RoyaltyFusion\Afip\Model\Sale\Invoice;
+use RoyaltyFusion\Afip\Catalog\TipoComprobante;
 use RoyaltyFusion\Afip\Qr\QrGenerator;
 use RoyaltyFusion\Afip\Service\AbstractService;
 use RoyaltyFusion\Afip\Service\PadronA13Service;
@@ -54,7 +55,7 @@ final class See
 {
     private ?Certificate $certificate = null;
     private ?string $cuit = null;
-    private TicketStorageInterface $ticketStorage;
+    private ?TicketStorageInterface $ticketStorage = null;
     private ?SoapTransportInterface $transport = null;
     private ValidatorOptions $validatorOptions;
     private ?FileLock $lock = null;
@@ -69,6 +70,12 @@ final class See
     private bool $checkLastVoucherDate = true;
     /** Reintentos de numeración automática ante el error 10016 (número ya utilizado). */
     private int $numberingRetries = 2;
+    /** Consultas FECompConsultar para recuperar el resultado tras un error de comunicación. */
+    private int $recoveryAttempts = 3;
+    /** Segundos entre consultas de recuperación (se multiplica por el número de intento). */
+    private float $recoveryDelay = 2.0;
+    /** Usar el directorio temporal del sistema para tickets y bloqueos si no se configuró otro. */
+    private bool $useDefaultLock = true;
     /** Verificar que el punto de venta esté habilitado (FEParamGetPtosVenta) antes de enviar. */
     private bool $verifySalesPoint = true;
     /** @var array<int, array<string, mixed>>|null */
@@ -83,7 +90,6 @@ final class See
 
     public function __construct(private Environment $environment = Environment::HOMOLOGACION)
     {
-        $this->ticketStorage = new MemoryTicketStorage();
         $this->validatorOptions = new ValidatorOptions();
     }
 
@@ -148,6 +154,7 @@ final class See
     {
         $this->ticketStorage = new FileTicketStorage($directory . DIRECTORY_SEPARATOR . 'tickets');
         $this->lock = new FileLock($directory . DIRECTORY_SEPARATOR . 'locks');
+        $this->useDefaultLock = false;
 
         return $this->reset();
     }
@@ -158,6 +165,7 @@ final class See
     public function setLockDirectory(?string $directory): self
     {
         $this->lock = $directory === null ? null : new FileLock($directory);
+        $this->useDefaultLock = false;
 
         return $this;
     }
@@ -223,6 +231,17 @@ final class See
         return $this;
     }
 
+    /**
+     * Política de recuperación ante errores de comunicación al autorizar.
+     */
+    public function setRecoveryPolicy(int $attempts, float $delaySeconds): self
+    {
+        $this->recoveryAttempts = max(1, $attempts);
+        $this->recoveryDelay = max(0.0, $delaySeconds);
+
+        return $this;
+    }
+
     public function setNumberingRetries(int $retries): self
     {
         $this->numberingRetries = max(0, $retries);
@@ -242,6 +261,7 @@ final class See
             if ($this->logger !== null) {
                 $wsaa->getClient()->setLogger($this->logger);
             }
+            $this->ticketStorage ??= new FileTicketStorage(self::defaultCacheDirectory() . DIRECTORY_SEPARATOR . 'tickets');
             $this->authManager = new AuthManager($wsaa, $this->ticketStorage, $this->environment);
         }
 
@@ -309,8 +329,10 @@ final class See
     /**
      * Valida y autoriza un comprobante (CAE). Si no tiene número, se asigna el siguiente.
      *
-     * @throws ValidationException si el comprobante no supera las validaciones locales
-     * @throws TransportException  si no se pudo comunicar con ARCA ni recuperar el resultado
+     * @throws ValidationException              si el comprobante no supera las validaciones (no se envía)
+     * @throws UncertainAuthorizationException  si falló la comunicación y no se pudo confirmar el
+     *                                          resultado: reenviar el MISMO comprobante (mismo número)
+     * @throws TransportException               si falló la comunicación antes de enviar el comprobante
      */
     public function send(Invoice $invoice): AuthorizationResult
     {
@@ -320,11 +342,20 @@ final class See
     /**
      * Valida y autoriza varios comprobantes del mismo tipo y punto de venta en una sola solicitud.
      *
+     * Si la numeración es automática y ARCA rechaza algún comprobante, los rechazados quedan
+     * sin número para poder corregirlos y reenviarlos.
+     *
      * @param Invoice[] $invoices
      */
     public function sendBatch(array $invoices): AuthorizationResult
     {
         $invoices = array_values($invoices);
+        foreach ($invoices as $invoice) {
+            $company = $invoice->getCompany();
+            if ($company !== null && $company->getCuit() === '') {
+                $company->setCuit($this->getCuit());
+            }
+        }
         $validator = new InvoiceValidator($this->validatorOptions);
         $validation = $validator->validateBatch($invoices);
         if (!$validation->isValid()) {
@@ -338,27 +369,41 @@ final class See
             $wsfe = $this->getWsfe();
             $this->checkSalesPoint($wsfe, $first->getPuntoVenta());
             $autoNumber = $first->getNumero() === null;
+            $ranges = array_map(static fn (Invoice $i): int => $i->getNumero() === null ? 0 : (int) $i->getNumeroHasta() - (int) $i->getNumero(), $invoices);
             $attempts = 0;
 
-            while (true) {
-                if ($autoNumber) {
-                    $last = $wsfe->getLastVoucher($first->getPuntoVenta(), $first->getTipoComprobante());
-                    $this->assignNumbers($invoices, $last + 1);
-                    $this->checkDateAgainstLast($wsfe, $first, $last);
-                }
-
-                $result = $this->authorizeWithRecovery($wsfe, $invoices);
-
-                $numeroUsado = $result->hasCode(10016);
-                if ($autoNumber && !$result->isSuccess() && $numeroUsado && $attempts < $this->numberingRetries) {
-                    $attempts++;
-                    $last = $wsfe->getLastVoucher($first->getPuntoVenta(), $first->getTipoComprobante());
-                    if ($last + 1 !== $first->getNumero()) {
-                        continue; // otro proceso usó el número: se renumera y reintenta
+            try {
+                while (true) {
+                    if ($autoNumber) {
+                        $last = $wsfe->getLastVoucher($first->getPuntoVenta(), $first->getTipoComprobante());
+                        $this->assignNumbers($invoices, $ranges, $last + 1);
+                        $this->checkDateAgainstLast($wsfe, $first, $last);
                     }
-                }
 
-                return $result;
+                    $result = $this->authorizeWithRecovery($wsfe, $invoices);
+
+                    if ($autoNumber && $this->isNumberingConflict($result) && $attempts < $this->numberingRetries) {
+                        $attempts++;
+                        $last = $wsfe->getLastVoucher($first->getPuntoVenta(), $first->getTipoComprobante());
+                        if ($last + 1 !== $first->getNumero()) {
+                            continue; // otro proceso usó el número: se renumera y reintenta
+                        }
+                    }
+
+                    if ($autoNumber) {
+                        $this->releaseNumbers($invoices);
+                    }
+
+                    return $result;
+                }
+            } catch (UncertainAuthorizationException $e) {
+                throw $e; // se conserva el número para reenviar el mismo comprobante
+            } catch (\Throwable $e) {
+                // Nada fue autorizado: se liberan los números asignados automáticamente.
+                if ($autoNumber) {
+                    $this->releaseNumbers($invoices);
+                }
+                throw $e;
             }
         });
     }
@@ -375,15 +420,23 @@ final class See
         if (!$validation->isValid()) {
             throw new ValidationException($validation);
         }
+        $wsfe = $this->getWsfe();
+        $this->lastService = $wsfe;
 
-        return $this->getWsfe()->informCaeaVouchers($invoices);
+        return $wsfe->informCaeaVouchers($invoices);
     }
 
     /**
      * Valida y autoriza un comprobante de exportación (WSFEX). Asigna Id y número si faltan.
+     *
+     * @throws UncertainAuthorizationException si no se pudo confirmar el resultado (reenviar el mismo comprobante)
      */
     public function sendExport(ExportInvoice $invoice): ExportAuthorizationResult
     {
+        $company = $invoice->getCompany();
+        if ($company !== null && $company->getCuit() === '') {
+            $company->setCuit($this->getCuit());
+        }
         $validation = $this->validateExport($invoice);
         if (!$validation->isValid()) {
             throw new ValidationException($validation);
@@ -393,44 +446,35 @@ final class See
 
         return $this->locked($key, function () use ($invoice): ExportAuthorizationResult {
             $wsfex = $this->getWsfex();
-            if ($invoice->getNumero() === null) {
-                $invoice->setNumero($wsfex->getLastVoucher($invoice->getPuntoVenta(), $invoice->getTipoComprobante()) + 1);
-            }
-            if ($invoice->getId() === null) {
-                $invoice->setId($wsfex->getLastId() + 1);
-            }
+            $this->lastService = $wsfex;
+            $autoNumber = $invoice->getNumero() === null;
+            $autoId = $invoice->getId() === null;
 
             try {
-                return $wsfex->authorize($invoice);
-            } catch (TransportException $e) {
-                if (!$this->autoRecover) {
-                    throw $e;
+                if ($autoNumber) {
+                    $invoice->setNumero($wsfex->getLastVoucher($invoice->getPuntoVenta(), $invoice->getTipoComprobante()) + 1);
                 }
-                $voucher = $this->tryRecover(fn (): ?array => $wsfex->getVoucher(
-                    $invoice->getTipoComprobante(),
-                    $invoice->getPuntoVenta(),
-                    (int) $invoice->getNumero()
-                ));
-                if ($voucher === null || !Num::equals((float) ($voucher['Imp_total'] ?? -1), $invoice->getImpTotal(), 0.01)) {
-                    throw $e;
+                if ($autoId) {
+                    $invoice->setId($wsfex->getLastId() + 1);
                 }
-                $result = new ExportAuthorizationResult(
-                    'A',
-                    (string) $voucher['Cae'],
-                    Date::fromAfip((string) ($voucher['Fch_venc_Cae'] ?? '')),
-                    (int) $invoice->getNumero(),
-                    Date::fromAfip((string) ($voucher['Fecha_cbte'] ?? '')),
-                    'S',
-                    null,
-                    [],
-                    [],
-                    $voucher
-                );
-                $invoice->setCae($result->getCae());
-                $invoice->setCaeVencimiento($result->getCaeVencimiento());
 
-                return $result->markRecovered();
+                try {
+                    $result = $wsfex->authorize($invoice);
+                } catch (TransportException $e) {
+                    return $this->recoverExport($wsfex, $invoice, $e);
+                }
+            } catch (UncertainAuthorizationException $e) {
+                throw $e;
+            } catch (\Throwable $e) {
+                $this->releaseExport($invoice, $autoNumber, $autoId);
+                throw $e;
             }
+
+            if (!$result->isSuccess()) {
+                $this->releaseExport($invoice, $autoNumber, $autoId);
+            }
+
+            return $result;
         });
     }
 
@@ -463,53 +507,174 @@ final class See
         try {
             return $wsfe->authorize($invoices);
         } catch (TransportException $e) {
-            if (!$this->autoRecover || count($invoices) !== 1) {
-                throw $e;
+            $first = $invoices[0];
+            $numbers = array_map(static fn (Invoice $i): int => (int) $i->getNumero(), $invoices);
+            if (!$this->autoRecover) {
+                throw $this->uncertain($first->getPuntoVenta(), $first->getTipoComprobante(), $numbers, false, $e);
             }
-            $invoice = $invoices[0];
-            $voucher = $this->tryRecover(fn (): ?VoucherInfo => $wsfe->getVoucher(
-                $invoice->getTipoComprobante(),
-                $invoice->getPuntoVenta(),
-                (int) $invoice->getNumero()
-            ));
-            if ($voucher === null) {
-                throw $e; // ARCA no registró el comprobante: puede reenviarse.
+
+            $vouchers = [];
+            $allNotFound = true;
+            foreach ($invoices as $invoice) {
+                [$voucher, $confirmedMissing] = $this->lookup(fn (): ?VoucherInfo => $wsfe->getVoucher(
+                    $invoice->getTipoComprobante(),
+                    $invoice->getPuntoVenta(),
+                    (int) $invoice->getNumero()
+                ));
+                $allNotFound = $allNotFound && $confirmedMissing;
+                if ($voucher === null) {
+                    continue;
+                }
+                if (!$this->matches($voucher, $invoice)) {
+                    throw new AfipException(sprintf(
+                        'El número %s ya fue autorizado por ARCA para otro comprobante (total %s, documento %s).',
+                        $invoice->getNumeroCompleto(),
+                        Num::format($voucher->getImpTotal()),
+                        $voucher->getDocNro()
+                    ), 0, $e);
+                }
+                $vouchers[] = $voucher;
             }
-            if (!$this->matches($voucher, $invoice)) {
-                throw new AfipException(sprintf(
-                    'El número %s ya fue autorizado por ARCA para otro comprobante (total %s, documento %s).',
-                    $invoice->getNumeroCompleto(),
-                    Num::format($voucher->getImpTotal()),
-                    $voucher->getDocNro()
-                ), 0, $e);
+
+            if (count($vouchers) !== count($invoices)) {
+                throw $this->uncertain($first->getPuntoVenta(), $first->getTipoComprobante(), $numbers, $allNotFound, $e);
             }
-            $result = AuthorizationResult::fromVoucher($voucher)->markRecovered();
-            $invoice->setCae($result->getCae());
-            $invoice->setCaeVencimiento($result->getCaeVencimiento());
+
+            $result = AuthorizationResult::fromVouchers(...$vouchers)->markRecovered();
+            foreach ($invoices as $i => $invoice) {
+                $invoice->setCae($vouchers[$i]->getCodigoAutorizacion());
+                $invoice->setCaeVencimiento($vouchers[$i]->getVencimiento());
+            }
 
             return $result;
         }
     }
 
+    private function recoverExport(WsfexService $wsfex, ExportInvoice $invoice, TransportException $e): ExportAuthorizationResult
+    {
+        $numbers = [(int) $invoice->getNumero()];
+        if (!$this->autoRecover) {
+            throw $this->uncertain($invoice->getPuntoVenta(), $invoice->getTipoComprobante(), $numbers, false, $e);
+        }
+        [$voucher, $confirmedMissing] = $this->lookup(fn (): ?array => $wsfex->getVoucher(
+            $invoice->getTipoComprobante(),
+            $invoice->getPuntoVenta(),
+            (int) $invoice->getNumero()
+        ));
+        if ($voucher === null) {
+            throw $this->uncertain($invoice->getPuntoVenta(), $invoice->getTipoComprobante(), $numbers, $confirmedMissing, $e);
+        }
+
+        $sameClient = static fn (?string $a, ?string $b): bool => preg_replace('/\W/', '', (string) $a) === preg_replace('/\W/', '', (string) $b);
+        $matches = (int) ($voucher['Cbte_nro'] ?? 0) === (int) $invoice->getNumero()
+            && Num::equals((float) ($voucher['Imp_total'] ?? -1), $invoice->getImpTotal(), 0.01)
+            && (string) ($voucher['Fecha_cbte'] ?? '') === $invoice->getFechaEmision()->format('Ymd')
+            && $sameClient($voucher['Cuit_pais_cliente'] ?? null, $invoice->getCuitPaisCliente() ?? '0')
+            && $sameClient($voucher['Id_impositivo'] ?? null, $invoice->getIdImpositivo());
+        if (!$matches) {
+            throw new AfipException(sprintf(
+                'El número %s ya fue autorizado por ARCA para otro comprobante de exportación.',
+                $invoice->getNumeroCompleto()
+            ), 0, $e);
+        }
+
+        $result = new ExportAuthorizationResult(
+            'A',
+            (string) $voucher['Cae'],
+            Date::fromAfip((string) ($voucher['Fch_venc_Cae'] ?? '')),
+            (int) $invoice->getNumero(),
+            Date::fromAfip((string) ($voucher['Fecha_cbte'] ?? '')),
+            'S',
+            null,
+            [],
+            [],
+            $voucher
+        );
+        $invoice->setCae($result->getCae());
+        $invoice->setCaeVencimiento($result->getCaeVencimiento());
+
+        return $result->markRecovered();
+    }
+
     /**
+     * Consulta un comprobante reintentando ante errores de comunicación o respuestas
+     * "inexistente" tempranas (ARCA puede seguir procesando la solicitud original).
+     *
      * @template T
      *
-     * @param callable(): T $query
+     * @param callable(): ?T $query
      *
-     * @return T|null
+     * @return array{0: T|null, 1: bool} [comprobante, true si ARCA confirmó que no existe]
      */
-    private function tryRecover(callable $query): mixed
+    private function lookup(callable $query): array
     {
-        // Se reintenta la consulta unos segundos por si el servicio sigue inestable.
-        for ($i = 0; $i < 3; $i++) {
+        $confirmedMissing = false;
+        for ($i = 0; $i < $this->recoveryAttempts; $i++) {
+            if ($i > 0 && $this->recoveryDelay > 0) {
+                usleep((int) ($this->recoveryDelay * 1_000_000 * $i));
+            }
             try {
-                return $query();
+                $found = $query();
+                if ($found !== null) {
+                    return [$found, false];
+                }
+                $confirmedMissing = true;
             } catch (TransportException) {
-                usleep(1_000_000 * ($i + 1));
+                $confirmedMissing = false;
             }
         }
 
-        return null;
+        return [null, $confirmedMissing];
+    }
+
+    /**
+     * @param int[] $numbers
+     */
+    private function uncertain(int $ptoVta, int $tipo, array $numbers, bool $notFound, TransportException $previous): UncertainAuthorizationException
+    {
+        return new UncertainAuthorizationException(
+            sprintf(
+                'No se pudo confirmar si ARCA autorizó el comprobante %s %05d-%s (%s). Reenvíe el MISMO comprobante, '
+                . 'con el mismo número, para obtener el resultado; no genere uno nuevo.',
+                TipoComprobante::description($tipo),
+                $ptoVta,
+                implode(', ', array_map(static fn (int $n): string => sprintf('%08d', $n), $numbers)),
+                $previous->getMessage()
+            ),
+            $ptoVta,
+            $tipo,
+            $numbers,
+            $notFound,
+            $previous
+        );
+    }
+
+    /**
+     * Error 10016 sin ningún comprobante aprobado: el número ya fue usado por otro proceso.
+     */
+    private function isNumberingConflict(AuthorizationResult $result): bool
+    {
+        if ($result->getResultado() !== 'R') {
+            return false;
+        }
+        foreach ($result->getDetails() as $detail) {
+            if ($detail->isApproved()) {
+                return false;
+            }
+        }
+        foreach ($result->getErrors() as $error) {
+            if ($error->getCode() === 10016) {
+                return true;
+            }
+        }
+        $first = $result->getDetail();
+        foreach ($first?->getObservaciones() ?? [] as $obs) {
+            if ($obs->getCode() === 10016) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function matches(VoucherInfo $voucher, Invoice $invoice): bool
@@ -524,14 +689,43 @@ final class See
 
     /**
      * @param Invoice[] $invoices
+     * @param int[]     $ranges cantidad de comprobantes adicionales de cada rango
      */
-    private function assignNumbers(array $invoices, int $next): void
+    private function assignNumbers(array $invoices, array $ranges, int $next): void
     {
-        foreach ($invoices as $invoice) {
-            $range = $invoice->getNumero() !== null ? (int) $invoice->getNumeroHasta() - (int) $invoice->getNumero() : 0;
+        foreach ($invoices as $i => $invoice) {
+            $range = $ranges[$i] ?? 0;
             $invoice->setNumero($next);
             $invoice->setNumeroHasta($range > 0 ? $next + $range : null);
             $next += $range + 1;
+        }
+    }
+
+    /**
+     * Quita el número asignado automáticamente a los comprobantes que no se autorizaron.
+     *
+     * @param Invoice[] $invoices
+     */
+    private function releaseNumbers(array $invoices): void
+    {
+        foreach ($invoices as $invoice) {
+            if (!$invoice->isAuthorized()) {
+                $invoice->setNumero(null);
+                $invoice->setNumeroHasta(null);
+            }
+        }
+    }
+
+    private function releaseExport(ExportInvoice $invoice, bool $autoNumber, bool $autoId): void
+    {
+        if ($invoice->isAuthorized()) {
+            return;
+        }
+        if ($autoNumber) {
+            $invoice->setNumero(null);
+        }
+        if ($autoId) {
+            $invoice->setId(null);
         }
     }
 
@@ -597,7 +791,22 @@ final class See
      */
     private function locked(string $key, callable $callback): mixed
     {
+        if ($this->lock === null && $this->useDefaultLock) {
+            $this->lock = new FileLock(self::defaultCacheDirectory() . DIRECTORY_SEPARATOR . 'locks');
+        }
+
         return $this->lock === null ? $callback() : $this->lock->run($key, $callback);
+    }
+
+    /**
+     * Directorio por defecto (temporal del sistema, separado por usuario del sistema operativo).
+     * En producción se recomienda setCacheDirectory() con una ruta persistente.
+     */
+    private static function defaultCacheDirectory(): string
+    {
+        $user = function_exists('posix_geteuid') ? (string) posix_geteuid() : preg_replace('/\W/', '', get_current_user());
+
+        return rtrim(sys_get_temp_dir(), '/\\') . DIRECTORY_SEPARATOR . 'afip-php-' . $user;
     }
 
     /**

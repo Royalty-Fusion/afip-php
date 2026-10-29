@@ -63,36 +63,48 @@ final class AuthorizationResult
     }
 
     /**
-     * Reconstruye un resultado aprobado a partir de un comprobante consultado con
+     * Reconstruye un resultado aprobado a partir de comprobantes consultados con
      * FECompConsultar (recuperación tras un error de comunicación).
+     */
+    public static function fromVouchers(VoucherInfo ...$vouchers): self
+    {
+        $details = [];
+        foreach ($vouchers as $voucher) {
+            $data = $voucher->toArray();
+            $details[] = new CaeDetail(
+                $voucher->getResultado() !== '' ? $voucher->getResultado() : 'A',
+                $voucher->getCodigoAutorizacion(),
+                $voucher->getVencimiento(),
+                $voucher->getNumero(),
+                (int) Arr::int($data, 'CbteHasta', $voucher->getNumero()),
+                $voucher->getFecha(),
+                $voucher->getDocTipo(),
+                $voucher->getDocNro(),
+                $voucher->getObservaciones(),
+                $data
+            );
+        }
+        $first = $vouchers[0];
+
+        return new self(
+            'A',
+            'S',
+            $first->getPuntoVenta(),
+            $first->getTipoComprobante(),
+            $first->getFechaProceso(),
+            $details,
+            [],
+            [],
+            ['ResultGet' => array_map(static fn (VoucherInfo $v): array => $v->toArray(), $vouchers)]
+        );
+    }
+
+    /**
+     * @deprecated usar fromVouchers()
      */
     public static function fromVoucher(VoucherInfo $voucher): self
     {
-        $data = $voucher->toArray();
-        $detail = new CaeDetail(
-            $voucher->getResultado() !== '' ? $voucher->getResultado() : 'A',
-            $voucher->getCodigoAutorizacion(),
-            $voucher->getVencimiento(),
-            $voucher->getNumero(),
-            (int) Arr::int($data, 'CbteHasta', $voucher->getNumero()),
-            $voucher->getFecha(),
-            $voucher->getDocTipo(),
-            $voucher->getDocNro(),
-            $voucher->getObservaciones(),
-            $data
-        );
-
-        return new self(
-            $detail->getResultado(),
-            'S',
-            $voucher->getPuntoVenta(),
-            $voucher->getTipoComprobante(),
-            $voucher->getFechaProceso(),
-            [$detail],
-            [],
-            [],
-            ['ResultGet' => $data]
-        );
+        return self::fromVouchers($voucher);
     }
 
     /**

@@ -507,7 +507,7 @@ final class InvoiceValidator
                 $r->error('COTIZACION_INVALIDA', 'cotizacion', 'Para moneda PES la cotización debe ser 1.', 10120);
             }
             if ($invoice->getPagoMismaMoneda() !== null) {
-                $r->error('CAN_MIS_MON_EXT_NO_CORRESPONDE', 'pagoMismaMoneda', 'El indicador de cancelación en misma moneda extranjera (CanMisMonExt) solo se informa en comprobantes en moneda extranjera.');
+                $r->warning('CAN_MIS_MON_EXT_NO_CORRESPONDE', 'pagoMismaMoneda', 'El indicador de cancelación en misma moneda extranjera (CanMisMonExt) solo aplica a moneda extranjera; no se enviará.');
             }
         } else {
             if (!is_finite($cotizacion) || $cotizacion <= 0) {
@@ -740,7 +740,8 @@ final class InvoiceValidator
         if (!Num::equals($copy->getImpTotal(), $invoice->getImpTotal(), $this->options->tolerancia)
             || !Num::equals($copy->getImpNeto(), $invoice->getImpNeto(), $this->options->tolerancia)
             || !Num::equals($copy->getImpIva(), $invoice->getImpIva(), $this->options->tolerancia)) {
-            $r->error('ITEMS_NO_CUADRAN', 'details', sprintf(
+            $add = $this->options->itemsEstrictos ? $r->error(...) : $r->warning(...);
+            $add('ITEMS_NO_CUADRAN', 'details', sprintf(
                 'Los importes del comprobante no coinciden con sus ítems (total según ítems: %s, informado: %s). Use InvoiceCalculator para calcularlos.',
                 Num::format($copy->getImpTotal()),
                 Num::format($invoice->getImpTotal())
