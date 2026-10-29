@@ -34,6 +34,8 @@ use RoyaltyFusion\Afip\Service\WsfexService;
 use RoyaltyFusion\Afip\Service\WsmtxcaService;
 use RoyaltyFusion\Afip\Service\WsbfeService;
 use RoyaltyFusion\Afip\Service\WsctService;
+use RoyaltyFusion\Afip\Service\WscdcService;
+use RoyaltyFusion\Afip\Service\WsfecredService;
 use RoyaltyFusion\Afip\Soap\CurlTransport;
 use RoyaltyFusion\Afip\Soap\SoapTransportInterface;
 use RoyaltyFusion\Afip\Support\Cuit;
@@ -98,6 +100,8 @@ final class See
     private ?WsmtxcaService $wsmtxca = null;
     private ?WsbfeService $wsbfe = null;
     private ?WsctService $wsct = null;
+    private ?WsfecredService $wsfecred = null;
+    private ?WscdcService $wscdc = null;
     private ?AbstractService $lastService = null;
 
     private Environment $environment;
@@ -361,6 +365,28 @@ final class See
             $this->environment,
             $this->transport(),
             $this->endpoints[Endpoints::WSCT] ?? null
+        ));
+    }
+
+    public function getWsfecred(): WsfecredService
+    {
+        return $this->wsfecred ??= $this->configure(new WsfecredService(
+            $this->getAuthManager(),
+            $this->getCuit(),
+            $this->environment,
+            $this->transport(),
+            $this->endpoints[Endpoints::WSFECRED] ?? null
+        ));
+    }
+
+    public function getWscdc(): WscdcService
+    {
+        return $this->wscdc ??= $this->configure(new WscdcService(
+            $this->getAuthManager(),
+            $this->getCuit(),
+            $this->environment,
+            $this->transport(),
+            $this->endpoints[Endpoints::WSCDC] ?? null
         ));
     }
 
@@ -1065,6 +1091,8 @@ final class See
         $this->wsmtxca = null;
         $this->wsbfe = null;
         $this->wsct = null;
+        $this->wsfecred = null;
+        $this->wscdc = null;
         $this->salesPoints = [];
 
         return $this;
