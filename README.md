@@ -16,6 +16,11 @@ contacta a ARCA**.
 | **WSAA** | Login con certificado: genera el TRA, lo firma en CMS y obtiene el Ticket de Acceso. Lo guarda en caché las 12 h de vigencia y lo renueva solo. |
 | **WSFEv1** | Facturas, notas de débito y crédito, recibos A/B/C/M, FCE MiPyME (201–213) y bienes usados. Pedido de CAE, CAEA (solicitar, consultar, informar, sin movimiento), consulta de comprobantes y todas las tablas `FEParamGet*`. |
 | **WSFEXv1** | Factura de exportación E (19, 20, 21): permisos de embarque, incoterms, ítems, cotización y parámetros. |
+| **WSMTXCA** | Factura con detalle de ítems informado a ARCA (clases A, B y M, incluida FCE): código de barras, unidad de medida, IVA e importe por ítem. CAE, CAEA y parámetros. |
+| **WSBFEv1** | Bono Fiscal Electrónico (bienes de capital): ítems con código NCM, zona y percepciones. |
+| **WSCT** | Comprobantes de turismo clase T (195, 196, 197) para no residentes: reintegro de IVA, formas de pago, pasaporte. |
+| **WSFECRED** | FCE MiPyME: si el cliente está obligado a recibir FCE y desde qué monto; como receptor, consultar, aceptar o rechazar FCE, rechazar notas e informar la cancelación. |
+| **WSCDC** | Constatación de comprobantes: verifica ante ARCA las facturas de proveedores (CAE, CAEA o CAI). |
 | **Padrón A5** | Constancia de inscripción: razón social, domicilio fiscal, impuestos, actividades y condición frente al IVA deducida. Devuelve el receptor listo para facturar. |
 | **Padrón A13** | Datos de identificación y CUIT/CUIL a partir de un DNI. |
 | **QR** | Código QR de la RG 4291 (con CAE o CAEA). |
@@ -129,6 +134,11 @@ La carpeta [`examples/`](examples) tiene un script para cada caso:
 | `08` | CAEA |
 | `09` | PDF |
 | `10` | Parámetros |
+| `11` | Factura con detalle de ítems (WSMTXCA) |
+| `12` | Bono fiscal (WSBFE) |
+| `13` | Factura T de turismo (WSCT) |
+| `14` | FCE: obligación del cliente y FCE recibidas (WSFECRED) |
+| `15` | Constatación de facturas de proveedores (WSCDC) |
 
 ## Modelos
 
@@ -141,6 +151,24 @@ La carpeta [`examples/`](examples) tiene un script para cada caso:
 | `Model\Sale\SaleDetail` | Ítem: precio con o sin IVA, alícuota, exento o no gravado, bonificación en % o en importe. |
 | `Model\Sale\Iva`, `Tributo`, `Opcional`, `CbteAsociado`, `Periodo`, `Comprador` | Los nodos de WSFEv1. |
 | `Model\Export\ExportInvoice`, `ExportItem`, `Permiso`, `ExportCbteAsociado` | Comprobante de WSFEXv1. |
+| `Model\Sale\BonoFiscalInvoice` | Bono fiscal (WSBFE): un `Invoice` con zona e Id. |
+| `Model\Sale\TurismoInvoice`, `FormaPago` | Comprobante de turismo (WSCT): país y domicilio del receptor, relación emisor-receptor, reintegro y formas de pago. |
+| `Model\Sale\DatoAdicional` | Datos adicionales de WSMTXCA y WSCT (t, c1..c6). |
+
+### Qué método usar
+
+| Comprobante | Servicio | Método |
+|---|---|---|
+| Facturas, notas y recibos A/B/C/M, FCE (sin detalle de ítems) | WSFEv1 | `$see->send($invoice)` / `sendBatch([...])` |
+| Facturas y notas A/B/M con detalle de ítems | WSMTXCA | `$see->sendMtxca($invoice)` |
+| Exportación E | WSFEXv1 | `$see->sendExport($exportInvoice)` |
+| Bono fiscal | WSBFE | `$see->sendBfe($bono)` |
+| Turismo T | WSCT | `$see->sendTurismo($turismo)` |
+| Comprobantes emitidos con CAEA | WSFEv1 / WSMTXCA | `$see->informCaea(...)` / `informCaeaMtxca(...)` |
+
+En WSMTXCA, WSBFE y WSCT, ARCA recibe cada ítem con su IVA. Calculá con
+`(new InvoiceCalculator())->calculate($invoice, true)`: esa opción calcula el IVA y el importe de cada
+ítem y arma los subtotales por alícuota como suma de los ítems, tal como los valida ARCA.
 
 Los catálogos están en `Catalog\*`: `TipoComprobante`, `TipoDocumento`, `AlicuotaIva`, `Concepto`,
 `CondicionIva`, `TipoTributo`, `TipoOpcional`, `Moneda` y `Exportacion`. Cada uno trae
@@ -153,6 +181,15 @@ ejecuta la misma validación y además hace estos controles en línea:
 
 - El punto de venta está habilitado y no fue dado de baja (`FEParamGetPtosVenta`).
 - La fecha no es anterior a la del último comprobante autorizado.
+- En notas de crédito y débito, el comprobante asociado propio existe en ARCA (`setCheckAssociatedVouchers()`).
+
+Y estos controles opcionales, que consultan otros servicios de ARCA:
+
+| Opción | Qué controla |
+|---|---|
+| `setFceCheck(true)` | Emisor MiPyME: exige FCE cuando el cliente está obligado y el importe alcanza el mínimo, y rechaza la FCE a clientes no obligados (WSFECRED). |
+| `setQuotationTolerance(5.0)` | La cotización no se desvía más de 5 % de la oficial de ARCA. |
+| `setPadronCheck(true)` | El cliente está activo en ARCA y su condición frente al IVA coincide con el padrón. |
 
 El listado completo de reglas, con su código y el error equivalente de ARCA, está en
 [docs/VALIDACIONES.md](docs/VALIDACIONES.md). En resumen, el SDK controla:
@@ -178,6 +215,10 @@ El listado completo de reglas, con su código y el error equivalente de ARCA, es
   - Las notas exigen anulación (22), un comprobante asociado con CUIT y fecha, y no llevan vencimiento.
 - **Emisor:** un monotributista o un exento no puede emitir A/B/M.
 - **Ítems:** si se cargaron, se avisa cuando los importes del comprobante no coinciden con ellos. Es una advertencia, o un error con `itemsEstrictos`.
+- **WSMTXCA, WSBFE y WSCT:** ítems obligatorios, IVA de cada ítem según su alícuota, subtotales iguales a la suma de los ítems y campos propios de cada servicio:
+  - WSBFE: código NCM y tributos admitidos.
+  - WSCT: relación emisor-receptor, reintegro, tarjeta y SWIFT.
+  - WSMTXCA: FCE con el CBU como dato adicional 21.
 
 Los parámetros normativos se configuran con `ValidatorOptions`. Así, si ARCA cambia un monto o
 un plazo, no hace falta actualizar el SDK:
@@ -191,6 +232,7 @@ $see->setValidatorOptions(new ValidatorOptions(
     requiereCondicionIvaReceptor: true,
     catalogosEstrictos: false,
     itemsEstrictos: false,
+    totalCeroEsError: false,
 ));
 ```
 
@@ -266,11 +308,17 @@ vendor/bin/phpunit
 
 Los tests usan un transporte simulado que responde como ARCA, así que no requieren conexión ni certificados.
 
+`tests/Unit/WsdlSchemaTest.php` genera los requests de todos los servicios (más de 130) y los
+valida contra el esquema XSD de los WSDL oficiales de ARCA (`tests/Fixtures/wsdl`). Así se
+comprueba el orden de los elementos, los campos obligatorios, los tipos y los largos.
+
 Antes de pasar a producción, emití en **homologación** al menos un comprobante de cada tipo que
-vaya a usar el ERP: A/B/C, notas, FCE y exportación.
+vaya a usar el ERP: A/B/C, notas, FCE, exportación, WSMTXCA, bono fiscal y turismo.
 
 ## Notas
 
 - Los web services siguen en los dominios `afip.gov.ar`. Si ARCA publica URLs nuevas, se cambian con `setEndpoint()` o `Endpoints::override()`.
-- El SDK no descarga el WSDL en cada request: arma los sobres SOAP siguiendo el orden exacto de los WSDL oficiales. Los mensajes se verificaron contra los esquemas de WSFEv1, WSFEXv1, WSAA y Padrón A5.
+- El SDK no descarga el WSDL en cada request: arma los sobres SOAP siguiendo el orden exacto de los WSDL oficiales y los tests los validan contra esos esquemas.
+- Cada servicio debe estar asociado al certificado: en WSASS para homologación y en el Administrador de Relaciones para producción. Los nombres son `wsfe`, `wsfex`, `wsmtxca`, `wsbfe`, `wsct`, `wsfecred`, `wscdc`, `ws_sr_constancia_inscripcion` y `ws_sr_padron_a13`.
+- **Fuera del alcance:** las liquidaciones y remitos de los sectores agropecuario y cárnico (WSLPG, WSLSP, WSLTV, WSLUM, carta de porte WSCPE, remitos electrónicos) y el cálculo de percepciones provinciales según los padrones de ARBA o AGIP. El SDK recibe el importe de la percepción como tributo y valida que cierre.
 - Los servidores de ARCA usan claves DH cortas. `CurlTransport` aplica `DEFAULT@SECLEVEL=1` para que OpenSSL 3 pueda conectarse, sin desactivar la verificación del certificado.

@@ -8,13 +8,19 @@ Reglas que el SDK verifica **antes** de enviar el comprobante a ARCA (generado a
 
 Los montos y plazos normativos (tope de consumidor final, días de tolerancia, etc.) se configuran con `ValidatorOptions`.
 
-## WSFEv1 (InvoiceValidator)
+## Comprobantes: WSFEv1, WSMTXCA, WSBFE y WSCT (InvoiceValidator)
 
 | Código | Nivel | Campo | Descripción | ARCA |
 |---|---|---|---|---|
 | `ACTIVIDAD_INVALIDA` | error | `actividades[i]` | El código de actividad debe ser un número positivo (FEParamGetActividades). |  |
 | `ALICUOTA_DUPLICADA` | error | `[i].id` | La alícuota … está informada más de una vez; agrupe las bases. |  |
 | `ALICUOTA_INVALIDA` | error | `[i].id` | La alícuota de IVA … no es válida (FEParamGetTiposIva). | 10051 |
+| `BFE_CONCEPTO` | error | `concepto` | El bono fiscal electrónico solo admite bienes (concepto Productos). |  |
+| `BFE_NCM` | error | `details[i].codigoNcm` | Cada ítem del bono fiscal debe tener un código NCM válido (ej. 8471.30.12, ver BFEGetPARAM_NCM). |  |
+| `BFE_NO_SOPORTADO` | error | `[i]` | WSBFE no admite …. |  |
+| `BFE_RANGO` | error | `numeroHasta` | WSBFE autoriza un comprobante por solicitud (sin rangos). |  |
+| `BFE_TRIBUTO` | error | `tributos[i].id` | WSBFE solo admite percepciones de IVA, IIBB, municipales e impuestos internos (informado: …). |  |
+| `BFE_ZONA` | error | `zona` | Indique la zona (BFEGetPARAM_Zonas). |  |
 | `CAEA_FECHA_GENERACION` | error | `fechaHoraGeneracion` | Debe informar la fecha y hora de generación del comprobante emitido con CAEA. |  |
 | `CAEA_INVALIDO` | error | `caea` | Debe informar el CAEA (14 dígitos) con el que se emitió el comprobante. |  |
 | `CAEA_NUMERO` | error | `numero` | Los comprobantes emitidos con CAEA deben tener número asignado. |  |
@@ -45,6 +51,16 @@ Los montos y plazos normativos (tope de consumidor final, días de tolerancia, e
 | `CONSUMIDOR_FINAL_SIN_IDENTIFICAR` | error | `client.tipoDoc` | Operaciones con consumidores finales de $ … o más requieren identificar al receptor (DNI, CUIT, CUIL o CDI). | 10015 |
 | `COTIZACION_DECIMALES` | error | `cotizacion` | La cotización admite como máximo 6 decimales. |  |
 | `COTIZACION_INVALIDA` | error | `cotizacion` | Para moneda PES la cotización debe ser 1. | 10120 |
+| `CT_DOMICILIO` | error | `domicilioReceptor` | El domicilio del receptor admite hasta 300 caracteres. |  |
+| `CT_FORMA_PAGO` | warning | `formasPago` | Se recomienda informar la forma de pago (consultarFormasPago). |  |
+| `CT_ITEM_CODIGO` | error | `details[i].codigo` | El código del ítem debe tener entre 3 y 50 caracteres. |  |
+| `CT_MODELO` | error | `invoice` | Los comprobantes de turismo se emiten con TurismoInvoice. |  |
+| `CT_NO_SOPORTADO` | error | `[i]` | WSCT no admite …. |  |
+| `CT_RANGO` | error | `numeroHasta` | WSCT autoriza un comprobante por solicitud (sin rangos). |  |
+| `CT_REINTEGRO` | error | `importeReintegro` | El reintegro se informa como importe negativo (o 0). |  |
+| `CT_RELACION` | error | `codigoRelacionEmisorReceptor` | Debe informar la relación emisor-receptor (consultarRelacionEmisorReceptor). |  |
+| `CT_SWIFT` | error | `formasPago[i].swiftCode` | El código SWIFT debe tener entre 8 y 11 caracteres. |  |
+| `CT_TARJETA` | error | `formasPago[i].numeroTarjeta` | Informe solo los 6 primeros dígitos de la tarjeta. |  |
 | `DOC_NRO_INVALIDO` | error | `client.numDoc` | El número de documento debe ser numérico de hasta 11 dígitos (ARCA no admite letras en DocNro). | 10015 |
 | `DOC_TIPO_INVALIDO` | error | `client.tipoDoc` | El tipo de documento … no es válido (FEParamGetTiposDoc). | 10015 |
 | `EMISOR_CUIT_INVALIDO` | error | `company.cuit` | El CUIT del emisor "…" no es válido. |  |
@@ -71,10 +87,16 @@ Los montos y plazos normativos (tope de consumidor final, días de tolerancia, e
 | `IMPORTE_DECIMALES` | error | `[i]` | Los importes admiten como máximo 2 decimales. Redondee o use InvoiceCalculator. |  |
 | `IMPORTE_EXCEDIDO` | error | `[i]` | El importe supera el máximo admitido (13 enteros y 2 decimales). |  |
 | `IMPORTE_NEGATIVO` | error | `[i]` | El importe no puede ser negativo. | 10047 |
+| `ITEMS_NO_CUADRAN` | error | `[i]` | La suma de los ítems (…) no coincide con el importe del comprobante (…). Use InvoiceCalculator con detalle por ítem. |  |
+| `ITEMS_REQUERIDOS` | error | `details` | … requiere el detalle de ítems del comprobante. |  |
 | `ITEM_ALICUOTA` | error | `[i].alicuotaIva` | El ítem gravado debe indicar una alícuota de IVA válida. |  |
 | `ITEM_CANTIDAD` | error | `[i].cantidad` | La cantidad del ítem debe ser mayor a 0. |  |
 | `ITEM_DESCRIPCION` | error | `[i].descripcion` | El ítem debe tener descripción. |  |
+| `ITEM_DESCRIPCION_LARGA` | error | `[i].descripcion` | La descripción del ítem admite hasta 4000 caracteres. |  |
+| `ITEM_IMPORTES` | error | `[i]` | Falta el IVA/importe del ítem: calcule con InvoiceCalculator::calculate($invoice, true). |  |
+| `ITEM_IVA_MAL_CALCULADO` | error | `[i].importeIva` | El IVA del ítem (…) no corresponde a la alícuota … (esperado …). |  |
 | `ITEM_PRECIO` | error | `[i].precioUnitario` | El precio unitario no puede ser negativo. |  |
+| `ITEM_UNIDAD` | error | `[i].codigoUnidadMedida` | Indique la unidad de medida del ítem (consultarUnidadesMedida). |  |
 | `IVA_BASE_INVALIDA` | error | `[i].baseImp` | La base imponible de la alícuota debe ser mayor a 0. |  |
 | `IVA_BASE_NO_CUADRA` | error | `impNeto` | La suma de las bases imponibles de IVA (…) debe ser igual al importe neto gravado (…). | 10053 |
 | `IVA_IMPORTE_NEGATIVO` | error | `[i].importe` | El importe de IVA no puede ser negativo. |  |
@@ -89,6 +111,11 @@ Los montos y plazos normativos (tope de consumidor final, días de tolerancia, e
 | `LOTE_VACIO` | error | `invoices` | Debe enviar al menos un comprobante. |  |
 | `MONEDA_DESCONOCIDA` | warning (error con catalogosEstrictos) | `moneda` | La moneda "…" no figura en el catálogo local; verifique con FEParamGetTiposMonedas. | 10119 |
 | `MONEDA_INVALIDA` | error | `moneda` | El código de moneda "…" no es válido (3 caracteres, ver FEParamGetTiposMonedas). | 10119 |
+| `MTXCA_ACTIVIDADES` | error | `actividades` | WSMTXCA no admite el detalle de actividades. |  |
+| `MTXCA_OBSERVACIONES` | error | `observaciones` | Las observaciones admiten hasta 2000 caracteres. |  |
+| `MTXCA_OPCIONALES` | error | `opcionales` | WSMTXCA no admite opcionales: use datos adicionales (setDatosAdicionales). |  |
+| `MTXCA_RANGO` | error | `numeroHasta` | WSMTXCA autoriza un comprobante por solicitud (sin rangos). |  |
+| `MTXCA_TIPO_NO_SOPORTADO` | error | `tipoComprobante` | WSMTXCA autoriza facturas y notas de crédito/débito clase A, B y M (incluida FCE). Para otros comprobantes use WSFEv1. |  |
 | `NUMERO_HASTA_INVALIDO` | error | `numeroHasta` | El número "hasta" debe ser mayor o igual al número "desde". |  |
 | `NUMERO_INVALIDO` | error | `numero` | El número de comprobante debe estar entre 1 y …. |  |
 | `OPCIONAL_DESCONOCIDO` | warning (error con catalogosEstrictos) | `[i].id` | El opcional … no figura en el catálogo local; verifique con FEParamGetTiposOpcional. |  |
@@ -106,7 +133,8 @@ Los montos y plazos normativos (tope de consumidor final, días de tolerancia, e
 | `RECEPTOR_REQUERIDO` | error | `client` | Debe informar el receptor. Para consumidor final sin identificar use Client::consumidorFinal(). |  |
 | `RECEPTOR_SIN_IDENTIFICAR` | warning | `client.tipoDoc` | Un receptor "…" normalmente debe identificarse con su documento. |  |
 | `RG3668_INCOMPLETO` | error | `opcionales` | Para RG 3668 deben informarse juntos los opcionales 61 (tipo doc. firmante), 62 (nro. doc. firmante) y 7 (carácter del firmante). |  |
-| `TOTAL_CERO` | warning | `impTotal` | El comprobante tiene importe total 0. |  |
+| `SUBTOTAL_IVA_ITEMS` | error | `ivas` | El subtotal de IVA … (…) debe ser igual a la suma del IVA de los ítems (…). |  |
+| `TOTAL_CERO` | warning (error con catalogosEstrictos) | `impTotal` | El comprobante tiene importe total 0. |  |
 | `TOTAL_NO_CUADRA` | error | `impTotal` | El importe total (…) debe ser igual a No gravado + Neto + Exento + Tributos + IVA (…). | 10048 |
 | `TRIBUTOS_NO_CUADRAN` | error | `impTributos` | La suma de los tributos (…) debe ser igual a ImpTrib (…). | 10049 |
 | `TRIBUTOS_REQUERIDOS` | error | `tributos` | Si ImpTrib es mayor a 0 debe informar el detalle de tributos. | 10049 |
@@ -120,8 +148,16 @@ Los montos y plazos normativos (tope de consumidor final, días de tolerancia, e
 
 | Código | Nivel | Campo | Descripción | ARCA |
 |---|---|---|---|---|
+| `CBTE_ASOC_INEXISTENTE` | error | `%scbtesAsociados[i]` | El comprobante asociado … …-… no existe como autorizado en ARCA. | 10041 |
+| `CONDICION_IVA_PADRON` | error | `client.condicionIva` | La condición frente al IVA informada (…) no coincide con el padrón de ARCA (…). |  |
+| `COTIZACION_FUERA_DE_RANGO` | error | `cotizacion` | La cotización informada (…) se desvía más de … %% de la oficial de ARCA (…). |  |
+| `FCE_OBLIGATORIA` | error | `tipoComprobante` | El receptor está obligado a recibir FCE MiPyME desde $ …: corresponde emitir Factura de Crédito Electrónica (201/206/211). |  |
+| `FCE_RECEPTOR_NO_OBLIGADO` | error | `tipoComprobante` | El receptor no está obligado ni optó por recibir Factura de Crédito Electrónica MiPyME: emita una factura común. | 150 |
 | `FECHA_ANTERIOR_ULTIMO` | error | `fechaEmision` | La fecha del comprobante (…) no puede ser anterior a la del último comprobante autorizado …-… (…). | 10016 |
+| `LOTE_EXCEDIDO` | error | `invoices` | Este servicio admite como máximo … comprobante(s) por solicitud. |  |
 | `PTO_VTA_NO_HABILITADO` | error | `puntoVenta` | El punto de venta … fue dado de baja el …. | 10004 |
+| `RECEPTOR_INACTIVO` | error | `client.numDoc` | El CUIT del receptor no está activo en ARCA (…). |  |
+| `RECEPTOR_INEXISTENTE` | error | `client.numDoc` | El CUIT del receptor no existe en el padrón de ARCA. |  |
 
 ## WSFEX (ExportInvoiceValidator)
 
