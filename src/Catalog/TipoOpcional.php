@@ -38,7 +38,7 @@ final class TipoOpcional
     public const TRANSFERENCIA_SCA = 'SCA'; // Sistema de Circulación Abierta
     public const TRANSFERENCIA_ADC = 'ADC'; // Agente de Depósito Colectivo
 
-    /** @var array<string, string> */
+    /** @var array<int, string> Las claves numéricas de PHP se convierten a int. */
     private const DATA = [
         '2' => 'RG Empresas Promovidas - Identificador de proyecto vinculado a Régimen de Promoción Industrial',
         '5' => 'Excepción cómputo IVA Crédito Fiscal',
@@ -77,7 +77,7 @@ final class TipoOpcional
     }
 
     /**
-     * @return array<string, string>
+     * @return array<int, string>
      */
     public static function all(): array
     {

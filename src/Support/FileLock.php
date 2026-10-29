@@ -8,7 +8,7 @@ namespace RoyaltyFusion\Afip\Support;
  * Lock exclusivo basado en archivos (flock). Se usa para serializar la numeración
  * automática de comprobantes entre procesos/usuarios del ERP.
  */
-final class FileLock
+final class FileLock implements \RoyaltyFusion\Afip\Lock\NumberingLockInterface
 {
     public function __construct(private readonly string $directory)
     {

@@ -1,5 +1,5 @@
 {
-    "name": "royalty-fusion/afip-php",
+    "name": "royaltyfusion/afip-php",
     "description": "SDK de Facturación Electrónica para Argentina (ARCA, ex-AFIP): WSAA, WSFEv1, WSFEXv1, Padrón A5/A13, CAEA, validaciones previas, QR (RG 4291) y representación impresa.",
     "type": "library",
     "keywords": [
@@ -31,7 +31,10 @@
     },
     "suggest": {
         "dompdf/dompdf": "Para generar el PDF de la representación impresa (PdfReport).",
-        "chillerlan/php-qrcode": "Para generar la imagen del código QR (RG 4291) en la representación impresa."
+        "chillerlan/php-qrcode": "Para generar la imagen del código QR (RG 4291) en la representación impresa.",
+        "ext-pdo": "Para guardar los tickets de acceso y bloquear la numeración en base de datos (PdoTicketStorage, PdoNumberingLock).",
+        "psr/log": "Para registrar las llamadas a ARCA con un logger PSR-3 (See::setLogger).",
+        "psr/clock": "Para inyectar un reloj PSR-20 (See::setClock)."
     },
     "autoload": {
         "psr-4": {

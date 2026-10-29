@@ -637,14 +637,15 @@ final class InvoiceValidator
         }
 
         $fce = TipoComprobante::isFce($invoice->getTipoComprobante());
+        $informados = array_map('strval', array_keys($seen));
         foreach ([TipoOpcional::FCE_CBU_EMISOR, TipoOpcional::FCE_ALIAS_EMISOR, TipoOpcional::FCE_ANULACION, TipoOpcional::FCE_TRANSFERENCIA] as $id) {
-            if (!$fce && isset($seen[$id])) {
+            if (!$fce && in_array($id, $informados, true)) {
                 $r->error('OPCIONAL_SOLO_FCE', 'opcionales', sprintf('El opcional %s (%s) solo corresponde a comprobantes FCE MiPyME.', $id, TipoOpcional::description($id)));
             }
         }
 
         // RG 3668: los tres datos del firmante se informan juntos
-        $rg3668 = array_intersect([TipoOpcional::RG3668_FIRMANTE_DOC_TIPO, TipoOpcional::RG3668_FIRMANTE_DOC_NRO, TipoOpcional::RG3668_CARACTER_FIRMANTE], array_keys($seen));
+        $rg3668 = array_intersect([TipoOpcional::RG3668_FIRMANTE_DOC_TIPO, TipoOpcional::RG3668_FIRMANTE_DOC_NRO, TipoOpcional::RG3668_CARACTER_FIRMANTE], $informados);
         if ($rg3668 !== [] && count($rg3668) !== 3) {
             $r->error('RG3668_INCOMPLETO', 'opcionales', 'Para RG 3668 deben informarse juntos los opcionales 61 (tipo doc. firmante), 62 (nro. doc. firmante) y 7 (carácter del firmante).');
         }

@@ -9,7 +9,7 @@ use RoyaltyFusion\Afip\Exception\AfipException;
 /**
  * Guarda los TA como JSON en un directorio (permisos 0600). Las escrituras son atómicas.
  */
-final class FileTicketStorage implements TicketStorageInterface
+final class FileTicketStorage implements LockableTicketStorageInterface
 {
     public function __construct(private readonly string $directory)
     {

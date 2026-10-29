@@ -40,7 +40,7 @@ RG 3668, RG 4004, RG 3411 (opcionales) y Ley 27.743 (Régimen de Transparencia F
   - `chillerlan/php-qrcode`, para la imagen del QR.
 
 ```bash
-composer require royalty-fusion/afip-php
+composer require royaltyfusion/afip-php:^0.1
 ```
 
 ```bash

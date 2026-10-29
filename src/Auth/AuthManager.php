@@ -47,7 +47,7 @@ final class AuthManager
             return $this->login($key, $service);
         };
 
-        $ticket = $this->storage instanceof FileTicketStorage
+        $ticket = $this->storage instanceof LockableTicketStorageInterface
             ? $this->storage->withLock($key, $login)
             : $login();
 

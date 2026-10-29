@@ -62,7 +62,7 @@ final class WsfeChannel implements VoucherChannel
         return [10016];
     }
 
-    public function salesPoints(): ?array
+    public function salesPoints(): array
     {
         return array_map(static fn (array $p): array => [
             'numero' => (int) ($p['Nro'] ?? 0),

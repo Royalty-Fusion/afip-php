@@ -64,7 +64,7 @@ final class WsmtxcaChannel implements VoucherChannel
         return [WsmtxcaService::ERROR_NUMERO];
     }
 
-    public function salesPoints(): ?array
+    public function salesPoints(): array
     {
         return $this->service->getSalesPoints('CAE');
     }

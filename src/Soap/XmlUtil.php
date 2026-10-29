@@ -69,6 +69,8 @@ final class XmlUtil
     /**
      * Convierte un elemento DOM en array. Los elementos sin hijos se devuelven como string;
      * los elementos repetidos se agrupan en listas.
+     *
+     * @return array<string, mixed>|string
      */
     public static function toArray(\DOMElement $element): array|string
     {

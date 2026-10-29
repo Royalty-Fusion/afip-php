@@ -70,7 +70,7 @@ final class WsctChannel implements VoucherChannel
         return [];
     }
 
-    public function salesPoints(): ?array
+    public function salesPoints(): array
     {
         return $this->service->getSalesPoints();
     }

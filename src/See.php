@@ -41,6 +41,7 @@ use RoyaltyFusion\Afip\Soap\SoapTransportInterface;
 use RoyaltyFusion\Afip\Support\Cuit;
 use RoyaltyFusion\Afip\Support\Date;
 use RoyaltyFusion\Afip\Support\FileLock;
+use RoyaltyFusion\Afip\Lock\NumberingLockInterface;
 use RoyaltyFusion\Afip\Support\Num;
 use RoyaltyFusion\Afip\Validator\ExportInvoiceValidator;
 use RoyaltyFusion\Afip\Validator\InvoiceValidator;
@@ -69,7 +70,7 @@ final class See
     private ?TicketStorageInterface $ticketStorage = null;
     private ?SoapTransportInterface $transport = null;
     private ValidatorOptions $validatorOptions;
-    private ?FileLock $lock = null;
+    private ?NumberingLockInterface $lock = null;
     /** @var array<string, string> */
     private array $endpoints = [];
     /** @var callable|null */
@@ -193,7 +194,19 @@ final class See
     }
 
     /**
-     * Habilita el bloqueo de numeración entre procesos (si no se usó setCacheDirectory()).
+     * Bloqueo de numeración enchufable (por ejemplo {@see \RoyaltyFusion\Afip\Lock\PdoNumberingLock}
+     * para varios servidores). null desactiva el bloqueo.
+     */
+    public function setNumberingLock(?NumberingLockInterface $lock): self
+    {
+        $this->lock = $lock;
+        $this->useDefaultLock = false;
+
+        return $this;
+    }
+
+    /**
+     * Habilita el bloqueo de numeración por archivos en un directorio (si no se usó setCacheDirectory()).
      */
     public function setLockDirectory(?string $directory): self
     {
@@ -1219,6 +1232,9 @@ final class See
         if ($this->lock === null && $this->useDefaultLock) {
             $this->lock = new FileLock(self::defaultCacheDirectory() . DIRECTORY_SEPARATOR . 'locks');
         }
+
+        // La clave incluye el ambiente: homologación y producción numeran por separado.
+        $key = $this->environment->value . '_' . $key;
 
         return $this->lock === null ? $callback() : $this->lock->run($key, $callback);
     }
