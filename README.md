@@ -244,19 +244,46 @@ $see->setValidatorOptions(new ValidatorOptions(
 
 ## Integración con el ERP
 
-- **Numeración:** si el comprobante no tiene número, `send()` consulta el último autorizado y usa el siguiente. Con `setCacheDirectory()`, la numeración queda bloqueada entre procesos con `flock`. Si ARCA responde 10016 porque otro proceso tomó el número, el SDK renumera y reintenta (`setNumberingRetries()`).
+- **Multi-empresa:** `See::fromConfig([...])` arma una instancia por emisor (certificado PEM, `.p12` o archivos, CUIT, ambiente, storage, bloqueo, logger, reloj) sin estado global. Ver [docs/SYMFONY.md](docs/SYMFONY.md).
+- **Numeración:** si el comprobante no tiene número, `send()` consulta el último autorizado y usa el siguiente. La numeración se bloquea entre procesos por ambiente, CUIT, punto de venta y tipo:
+  - `FileLock`: por defecto, o con `setCacheDirectory()`.
+  - `PdoNumberingLock`: `GET_LOCK` de MySQL/MariaDB o advisory lock de PostgreSQL, para varios servidores. Se configura con `setNumberingLock()`. Si ARCA responde 10016 porque otro proceso tomó el número, el SDK renumera y reintenta (`setNumberingRetries()`).
 - **Caídas y timeouts:** ante un error de comunicación, el SDK consulta el comprobante con `FECompConsultar`, con reintentos (`setRecoveryPolicy()`).
   - Si ARCA lo autorizó con los mismos datos, devuelve el CAE (`$result->isRecovered()`).
-  - Si no lo puede confirmar, lanza `UncertainAuthorizationException`. El comprobante **conserva su número** (`getNumeros()`): reenviá el mismo objeto. Si ARCA ya lo había autorizado, responde con el mismo CAE (reproceso). Nunca generes un comprobante nuevo con otro número para la misma venta.
+  - Si no lo puede confirmar, lanza `UncertainAuthorizationException`. El comprobante **conserva su número**. `toArray()` (o `json_encode($e)`) devuelve servicio, ambiente, CUIT, tipo, punto de venta, números y el hash SHA-256 de los datos enviados, para guardarlos en la BD.
+  - Desde cualquier proceso (un cron), `$see->reconcile($invoice)` consulta ARCA por tipo, punto de venta y número:
+    - devuelve el CAE si coincide;
+    - devuelve `null` si no existe, y entonces se reenvía con el mismo número;
+    - lanza `VoucherMismatchException` si el número está autorizado con otros datos.
+  - Nunca generes un comprobante nuevo con otro número para la misma venta.
   - Si el número figura autorizado con otros datos, lo informa.
 - **Rechazos:** si ARCA rechaza un comprobante numerado automáticamente, el número se libera (`getNumero()` vuelve a `null`) para corregirlo y reenviarlo. En un lote parcialmente aprobado, los aprobados conservan su número y su CAE, y el lote no se reenvía.
-- **Auditoría:** `$result->getRequestXml()` y `getResponseXml()` devuelven los XML enviados y recibidos para guardarlos junto al comprobante. Con `$see->setLogger(fn ($op, $req, $res, $err) => ...)` se registran todas las llamadas.
-- **Tickets de acceso:** por defecto se guardan, junto con los bloqueos, en el directorio temporal del sistema (`afip-php-<uid>`). En producción usá `setCacheDirectory()` con una ruta persistente, o `CacheTicketStorage`, que acepta Redis o cualquier caché PSR-16, si hay varios servidores. Si el TA no se comparte entre procesos, ARCA rechaza el login siguiente con `coe.alreadyAuthenticated`.
+- **Auditoría:** `$result->getRequestXml()` y `getResponseXml()` devuelven los XML enviados y recibidos para guardarlos junto al comprobante. `$see->setLogger($logger)` acepta un logger PSR-3 o un callable y registra todas las llamadas. Antes de registrar oculta token, sign, el CMS del login y cualquier clave privada.
+- **Tickets de acceso:** en producción guardalos en la base con `PdoTicketStorage` (MySQL/MariaDB, PostgreSQL o SQLite, solo `ext-pdo`), así sobreviven a los despliegues y se comparten entre servidores. También están `CacheTicketStorage` (Redis o cualquier caché PSR-16) y `FileTicketStorage`. Por defecto se usa el directorio temporal del sistema. Si el ticket se pierde, ARCA rechaza el login con `coe.alreadyAuthenticated` hasta que vence (12 h).
+- **Cotización:** `$see->getCotizacion('DOL', $fecha)` devuelve la cotización oficial redondeada a 6 decimales, lista para `setMoneda('DOL', $cotizacion)`.
+- **Reloj:** `$see->setClock($clock)` acepta un reloj PSR-20 o un callable, para validar con la fecha civil que quieras en los tests del ERP.
 - **Contingencia:** con CAEA se pide el código por quincena (`requestCaea`), se emite offline y después se informa con `$see->informCaea($invoices)`.
 - **Clientes:** `$see->getPadronA5()->getPersona($cuit)?->toClient()` arma el receptor con la razón social, el domicilio y la condición frente al IVA.
 - **Endpoints:** `$see->setEndpoint(Endpoints::WSFE, $url)` cambia la URL de un servicio, por ejemplo para un simulador o si ARCA migra de dominio.
 
 ## Representación impresa
+
+Para dibujar el comprobante con el motor del ERP (TCPDF, etc.), sin dompdf ni librerías de QR:
+
+```php
+$data = $see->getRepresentationData($invoice);
+// $data['letra']         'A'
+// $data['codigo']        '01'
+// $data['puntoVenta']    '00001'
+// $data['numero']        '00000042'
+// $data['cae']           '76123456789012'      $data['caeVencimiento']  '2026-11-08'
+// $data['qrUrl']         URL para generar el QR (RG 4291)
+// $data['emisor'], $data['receptor'], $data['importes'] (neto, ivas[], tributos, total)
+// $data['leyendas']      RG 5003 (A a monotributista), "A CONSUMIDOR FINAL" (RG 5700) y las del comprobante
+// $data['transparenciaFiscal']  ['ivaContenido' => …, 'otrosImpuestosNacionalesIndirectos' => …] en clase B (Ley 27.743)
+```
+
+También hay un HTML y un PDF propios, opcionales:
 
 ```php
 use RoyaltyFusion\Afip\Report\{HtmlReport, PdfReport};
@@ -281,8 +308,8 @@ Para usar un diseño propio, pasá `['template' => '/ruta/plantilla.php']`.
 ## Symfony
 
 El SDK no depende de ningún framework y funciona con Symfony 7.4, Laravel o PHP plano.
-La configuración de servicios para Symfony, con los tickets en la caché de Symfony, está en
-[docs/SYMFONY.md](docs/SYMFONY.md).
+La integración multi-empresa con Symfony (fábrica por establecimiento, tickets y bloqueos en la
+base de datos, cron de reconciliación) está en [docs/SYMFONY.md](docs/SYMFONY.md).
 
 ## Errores
 
@@ -291,7 +318,8 @@ Todas las excepciones extienden `RoyaltyFusion\Afip\Exception\AfipException`.
 | Excepción | Cuándo |
 |---|---|
 | `ValidationException` | El comprobante no pasó la validación local y no se envió. |
-| `UncertainAuthorizationException` | Falló la comunicación al autorizar y no se pudo confirmar el resultado. Hay que reenviar el mismo comprobante con el mismo número. Extiende `TransportException`. |
+| `UncertainAuthorizationException` | Falló la comunicación al autorizar y no se pudo confirmar el resultado. Hay que reconciliar o reenviar el mismo comprobante con el mismo número. Extiende `TransportException`. |
+| `VoucherMismatchException` | `reconcile()` encontró el número autorizado con otros datos. |
 | `TransportException` | Error de red, TLS o HTTP antes de enviar el comprobante. |
 | `WsaaException` | El login falló: certificado sin relación con el servicio, reloj desfasado, `coe.alreadyAuthenticated`… |
 | `CertificateException` | El certificado o la clave son inválidos, están vencidos o no se corresponden. |
@@ -301,6 +329,20 @@ Todas las excepciones extienden `RoyaltyFusion\Afip\Exception\AfipException`.
 
 Un rechazo de ARCA en `FECAESolicitar` **no** es una excepción: `isSuccess()` devuelve `false` y
 `getErrors()`, `getObservaciones()` y `hasCode()` dan el detalle.
+
+### Contrato de errores para el ERP
+
+| Situación | Cómo llega | ¿Se envió a ARCA? | Número | Acción del ERP |
+|---|---|---|---|---|
+| Datos inválidos o incompletos | `ValidationException` (`getResult()->getErrors()`: código, campo, mensaje) | No | No se asigna | Mostrar los errores al usuario, corregir y reenviar. |
+| Rechazo de ARCA | `AuthorizationResult` con `isSuccess() === false` (`getErrors()`, `getObservaciones()`, `hasCode()`) | Sí, rechazado | Se libera si era automático | Mostrar el motivo, corregir y reenviar. |
+| Aprobado | `isSuccess() === true` | Sí | Asignado | Guardar número, CAE, vencimiento y los XML. |
+| Aprobado tras una caída | `isSuccess()` e `isRecovered()` | Sí | Asignado | Igual que aprobado. |
+| Estado incierto (contingencia) | `UncertainAuthorizationException` | Desconocido | Se conserva | Guardar `toArray()`, marcar "pendiente de confirmar" y reconciliar con `reconcile()` desde un cron. No emitir otro número. |
+| Número usado con otros datos | `VoucherMismatchException` / `AfipException` | Sí (otro comprobante) | Ocupado | Intervención manual: revisar duplicados. |
+| Error de red antes de enviar | `TransportException` | No | Se libera | Reintentar más tarde. |
+| Login / certificado | `WsaaException`, `CertificateException` | No | — | Revisar el certificado, su vencimiento y la relación con el servicio. Si dice `coe.alreadyAuthenticated`, el ticket no se persistió: usar `PdoTicketStorage` y esperar al vencimiento. |
+| Consulta o parámetro | `ServiceException`, `SoapFaultException`, `PadronException` | — | — | Registrar y reintentar. |
 
 ## Tests
 
@@ -318,8 +360,23 @@ Los tests usan un transporte simulado que responde como ARCA, así que no requie
 valida contra el esquema XSD de los WSDL oficiales de ARCA (`tests/Fixtures/wsdl`). Así se
 comprueba el orden de los elementos, los campos obligatorios, los tipos y los largos.
 
-Antes de pasar a producción, emití en **homologación** al menos un comprobante de cada tipo que
-vaya a usar el ERP: A/B/C, notas, FCE, exportación, WSMTXCA, bono fiscal y turismo.
+### Pruebas reales en homologación
+
+`tests/Integration` se conecta a ARCA homologación. Solo corre si definís las variables de entorno; sin ellas los tests se omiten, y la CI no los ejecuta.
+
+```bash
+AFIP_HOMO_CERT=cert.crt AFIP_HOMO_KEY=clave.key AFIP_HOMO_CUIT=20123456789 AFIP_HOMO_PTOVTA=1 vendor/bin/phpunit --testsuite homologacion
+```
+
+Las pruebas cubren:
+
+- FEDummy y el último comprobante autorizado.
+- Una Factura A, B y C, cada una con su nota de crédito asociada, la consulta del comprobante y `reconcile()`.
+- El padrón A5.
+- La recuperación tras un timeout simulado después de enviar.
+
+Antes de pasar a producción, emití en homologación al menos un comprobante de cada tipo que
+vaya a usar el ERP.
 
 ## Notas
 

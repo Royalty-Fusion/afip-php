@@ -2,6 +2,7 @@
 <phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
          bootstrap="vendor/autoload.php"
+         defaultTestSuite="unit"
          colors="true"
          cacheDirectory=".phpunit.cache"
          failOnWarning="true"
@@ -9,6 +10,10 @@
     <testsuites>
         <testsuite name="unit">
             <directory>tests/Unit</directory>
+        </testsuite>
+        <!-- Pruebas reales contra ARCA homologación: requieren AFIP_HOMO_* (ver tests/Integration) -->
+        <testsuite name="homologacion">
+            <directory>tests/Integration</directory>
         </testsuite>
     </testsuites>
     <source>

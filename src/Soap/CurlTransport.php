@@ -68,7 +68,7 @@ final class CurlTransport implements SoapTransportInterface
         $errno = curl_errno($handle);
         $error = curl_error($handle);
         $status = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
-        curl_close($handle);
+        unset($handle); // curl_close() es un no-op desde PHP 8.0 y está deprecado en 8.5
 
         if ($response === false || $errno !== 0) {
             throw new TransportException(sprintf('Error de comunicación con %s: (%d) %s', $url, $errno, $error));
