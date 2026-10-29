@@ -89,6 +89,16 @@ final class See
     private bool $useDefaultLock = true;
     /** Verificar que el punto de venta esté habilitado (FEParamGetPtosVenta) antes de enviar. */
     private bool $verifySalesPoint = true;
+    /** Emisor MiPyME: verificar con WSFECRED si corresponde (o no) emitir FCE. */
+    private bool $fceCheck = false;
+    /** Desvío máximo (%) de la cotización informada respecto de la oficial; null = sin control. */
+    private ?float $quotationTolerance = null;
+    /** Verificar que los comprobantes asociados propios existan en ARCA. */
+    private bool $checkAssociated = true;
+    /** Verificar la condición frente al IVA y el estado del receptor en el padrón A5. */
+    private bool $padronCheck = false;
+    /** @var array<string, mixed> */
+    private array $onlineCache = [];
     /** @var array<string, array<int, array{numero: int, bloqueado: bool, baja: ?string}>|null> */
     private array $salesPoints = [];
 
@@ -261,6 +271,50 @@ final class See
     {
         $this->recoveryAttempts = max(1, $attempts);
         $this->recoveryDelay = max(0.0, $delaySeconds);
+
+        return $this;
+    }
+
+    /**
+     * Para emisores MiPyME: antes de enviar, consulta WSFECRED y exige FCE cuando el receptor
+     * está obligado y el importe alcanza el mínimo (o rechaza la FCE si el receptor no está
+     * obligado). Requiere el servicio wsfecred habilitado en el certificado.
+     */
+    public function setFceCheck(bool $emisorMiPyme): self
+    {
+        $this->fceCheck = $emisorMiPyme;
+
+        return $this;
+    }
+
+    /**
+     * Controla que la cotización de moneda extranjera no se desvíe más de $percent % de la
+     * oficial de ARCA. null desactiva el control.
+     */
+    public function setQuotationTolerance(?float $percent): self
+    {
+        $this->quotationTolerance = $percent;
+
+        return $this;
+    }
+
+    /**
+     * Verifica en ARCA que los comprobantes asociados propios existan (notas de crédito/débito).
+     */
+    public function setCheckAssociatedVouchers(bool $check): self
+    {
+        $this->checkAssociated = $check;
+
+        return $this;
+    }
+
+    /**
+     * Verifica en el padrón (constancia de inscripción) que el receptor esté activo y que su
+     * condición frente al IVA coincida con la informada. Requiere ws_sr_constancia_inscripcion.
+     */
+    public function setPadronCheck(bool $check): self
+    {
+        $this->padronCheck = $check;
 
         return $this;
     }
@@ -460,6 +514,7 @@ final class See
         return $this->locked($key, function () use ($channel, $invoices, $first): AuthorizationResult {
             $this->lastService = $channel->service();
             $this->checkSalesPoint($channel, $first->getPuntoVenta());
+            $this->onlineChecks($channel, $invoices);
             $autoNumber = $first->getNumero() === null;
             $ranges = array_map(static fn (Invoice $i): int => $i->getNumero() === null ? 0 : (int) $i->getNumeroHasta() - (int) $i->getNumero(), $invoices);
             $attempts = 0;
@@ -985,6 +1040,92 @@ final class See
      * Verifica que el punto de venta exista, no esté bloqueado ni dado de baja.
      * En homologación ARCA suele devolver la lista vacía: en ese caso no se verifica.
      */
+    /**
+     * Controles opcionales contra ARCA antes de enviar (ver setFceCheck, setQuotationTolerance,
+     * setCheckAssociatedVouchers, setPadronCheck).
+     *
+     * @param Invoice[] $invoices
+     */
+    private function onlineChecks(VoucherChannel $channel, array $invoices): void
+    {
+        $result = new ValidationResult();
+        foreach ($invoices as $i => $invoice) {
+            $prefix = count($invoices) > 1 ? sprintf('[%d].', $i) : '';
+            $client = $invoice->getClient();
+            $tipo = $invoice->getTipoComprobante();
+            $moneda = $invoice->getMoneda();
+
+            // 1) Cotización vs. oficial
+            if ($this->quotationTolerance !== null && $moneda !== 'PES' && $channel instanceof WsfeChannel) {
+                $official = $this->onlineCache['ctz_' . $moneda] ??= $this->getWsfe()->getQuotation($moneda)['cotizacion'];
+                if ($official > 0 && abs($invoice->getCotizacion() - $official) / $official * 100 > $this->quotationTolerance) {
+                    $result->error('COTIZACION_FUERA_DE_RANGO', $prefix . 'cotizacion', sprintf(
+                        'La cotización informada (%s) se desvía más de %s %% de la oficial de ARCA (%s).',
+                        Num::formatCompact($invoice->getCotizacion()),
+                        Num::formatCompact($this->quotationTolerance),
+                        Num::formatCompact($official)
+                    ));
+                }
+            }
+
+            // 2) Comprobantes asociados propios
+            if ($this->checkAssociated && TipoComprobante::isNota($tipo)) {
+                foreach ($invoice->getCbtesAsociados() as $j => $asoc) {
+                    if ($asoc->getCuit() !== null && $asoc->getCuit() !== $this->getCuit()) {
+                        continue; // de otro emisor: no se puede consultar
+                    }
+                    $found = $channel->find($asoc->getTipo(), $asoc->getPuntoVenta(), $asoc->getNumero());
+                    if ($found === null) {
+                        $result->error('CBTE_ASOC_INEXISTENTE', sprintf('%scbtesAsociados[%d]', $prefix, $j), sprintf(
+                            'El comprobante asociado %s %05d-%08d no existe como autorizado en ARCA.',
+                            TipoComprobante::description($asoc->getTipo()),
+                            $asoc->getPuntoVenta(),
+                            $asoc->getNumero()
+                        ), 10041);
+                    }
+                }
+            }
+
+            if ($client === null || $client->getTipoDoc() !== 80) {
+                continue;
+            }
+
+            // 3) FCE MiPyME
+            if ($this->fceCheck && in_array(TipoComprobante::clase($tipo), ['A', 'B', 'C'], true) && TipoComprobante::isFactura($tipo)) {
+                $key = 'fce_' . $client->getNumDoc() . '_' . $invoice->getFechaEmision()->format('Ymd');
+                $obligation = $this->onlineCache[$key] ??= $this->getWsfecred()->getObligation($client->getNumDoc(), $invoice->getFechaEmision());
+                $totalPesos = $invoice->getImpTotal() * ($moneda === 'PES' ? 1.0 : $invoice->getCotizacion());
+                if (TipoComprobante::isFce($tipo) && !$obligation['obligado']) {
+                    $result->error('FCE_RECEPTOR_NO_OBLIGADO', $prefix . 'tipoComprobante', 'El receptor no está obligado ni optó por recibir Factura de Crédito Electrónica MiPyME: emita una factura común.', 150);
+                } elseif (!TipoComprobante::isFce($tipo) && $obligation['obligado'] && $totalPesos >= $obligation['montoDesde']) {
+                    $result->error('FCE_OBLIGATORIA', $prefix . 'tipoComprobante', sprintf(
+                        'El receptor está obligado a recibir FCE MiPyME desde $ %s: corresponde emitir Factura de Crédito Electrónica (201/206/211).',
+                        Num::display($obligation['montoDesde'])
+                    ));
+                }
+            }
+
+            // 4) Padrón: receptor activo y condición IVA coherente
+            if ($this->padronCheck) {
+                $persona = $this->onlineCache['padron_' . $client->getNumDoc()] ??= $this->getPadronA5()->getPersona($client->getNumDoc()) ?? false;
+                if ($persona === false) {
+                    $result->error('RECEPTOR_INEXISTENTE', $prefix . 'client.numDoc', 'El CUIT del receptor no existe en el padrón de ARCA.');
+                } elseif (!$persona->isActiva()) {
+                    $result->error('RECEPTOR_INACTIVO', $prefix . 'client.numDoc', sprintf('El CUIT del receptor no está activo en ARCA (%s).', (string) $persona->getEstadoClave()));
+                } elseif ($persona->getCondicionIva() !== null && $client->getCondicionIva() !== null && $persona->getCondicionIva() !== $client->getCondicionIva()) {
+                    $result->error('CONDICION_IVA_PADRON', $prefix . 'client.condicionIva', sprintf(
+                        'La condición frente al IVA informada (%s) no coincide con el padrón de ARCA (%s).',
+                        \RoyaltyFusion\Afip\Catalog\CondicionIva::description((int) $client->getCondicionIva()),
+                        \RoyaltyFusion\Afip\Catalog\CondicionIva::description((int) $persona->getCondicionIva())
+                    ));
+                }
+            }
+        }
+        if (!$result->isValid()) {
+            throw new ValidationException($result);
+        }
+    }
+
     private function checkSalesPoint(VoucherChannel $channel, int $puntoVenta): void
     {
         if (!$this->verifySalesPoint) {
@@ -1094,6 +1235,7 @@ final class See
         $this->wsfecred = null;
         $this->wscdc = null;
         $this->salesPoints = [];
+        $this->onlineCache = [];
 
         return $this;
     }

@@ -364,7 +364,9 @@ final class InvoiceValidator
         }
 
         if ($fields['impTotal'] <= 0 && !TipoComprobante::isRecibo($invoice->getTipoComprobante())) {
-            $r->warning('TOTAL_CERO', 'impTotal', 'El comprobante tiene importe total 0.');
+            $this->options->totalCeroEsError
+                ? $r->error('TOTAL_CERO', 'impTotal', 'El comprobante tiene importe total 0.')
+                : $r->warning('TOTAL_CERO', 'impTotal', 'El comprobante tiene importe total 0.');
         }
 
         if (TipoComprobante::sinIva($invoice->getTipoComprobante())) {

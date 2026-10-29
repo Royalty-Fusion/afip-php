@@ -41,6 +41,8 @@ final class ValidatorOptions
          * ARCA no recibe los ítems, pero la representación impresa los muestra.
          */
         public bool $itemsEstrictos = false,
+        /** Tratar como error (y no advertencia) un comprobante con importe total 0. */
+        public bool $totalCeroEsError = false,
     ) {
     }
 }
