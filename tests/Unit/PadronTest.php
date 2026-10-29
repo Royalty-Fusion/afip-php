@@ -77,6 +77,21 @@ final class PadronTest extends TestCase
         $this->see($transport)->getPadronA5()->getPersona('20267565393');
     }
 
+    public function testA13Persona(): void
+    {
+        $transport = (new MockTransport())->withLogin()->on('getPersona', MockTransport::envelope(
+            '<ns2:getPersonaResponse xmlns:ns2="http://a13.soap.ws.server.puc.sr/"><personaReturn><persona>'
+            . '<apellido>PEREZ</apellido><nombre>JUAN</nombre><estadoClave>ACTIVO</estadoClave><idPersona>20267565393</idPersona><tipoPersona>FISICA</tipoPersona>'
+            . '<domicilio><direccion>CALLE 1</direccion><localidad>LA PLATA</localidad><codigoPostal>1900</codigoPostal><descripcionProvincia>BUENOS AIRES</descripcionProvincia><tipoDomicilio>LEGAL/REAL</tipoDomicilio></domicilio>'
+            . '<domicilio><direccion>CALLE 2</direccion><localidad>LA PLATA</localidad><codigoPostal>1900</codigoPostal><descripcionProvincia>BUENOS AIRES</descripcionProvincia><tipoDomicilio>FISCAL</tipoDomicilio></domicilio>'
+            . '</persona></personaReturn></ns2:getPersonaResponse>'
+        ));
+        $persona = $this->see($transport)->getPadronA13()->getPersona('20267565393');
+        self::assertSame('PEREZ JUAN', $persona->getNombreCompleto());
+        self::assertSame('CALLE 2', $persona->getDomicilioFiscal()->getDireccion());
+        self::assertNull($persona->getCondicionIva());
+    }
+
     public function testA13CuitsByDocumento(): void
     {
         $transport = (new MockTransport())->withLogin()->on('getIdPersonaListByDocumento', MockTransport::envelope(

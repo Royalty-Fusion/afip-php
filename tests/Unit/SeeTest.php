@@ -170,6 +170,27 @@ final class SeeTest extends TestCase
         self::assertSame([], $this->transport->requestsFor('FECAESolicitar'));
     }
 
+    public function testInformCaea(): void
+    {
+        $invoice = Factory::facturaB()->setNumero(15)->setCaea('31234567890123')->setFechaHoraGeneracion(new \DateTimeImmutable());
+        $this->transport->on('FECAEARegInformativo', MockTransport::wsfe('FECAEARegInformativo',
+            '<FeCabResp><Cuit>20111111112</Cuit><PtoVta>1</PtoVta><CbteTipo>6</CbteTipo><FchProceso>20261029</FchProceso><CantReg>1</CantReg><Resultado>A</Resultado></FeCabResp>'
+            . '<FeDetResp><FECAEADetResponse><Concepto>1</Concepto><DocTipo>99</DocTipo><DocNro>0</DocNro><CbteDesde>15</CbteDesde><CbteHasta>15</CbteHasta>'
+            . '<CbteFch>20261029</CbteFch><Resultado>A</Resultado><CAEA>31234567890123</CAEA></FECAEADetResponse></FeDetResp>'));
+
+        $result = $this->see->informCaea($invoice);
+        self::assertTrue($result->isSuccess());
+        self::assertSame('31234567890123', $result->getCae());
+        $body = $this->transport->requestsFor('FECAEARegInformativo')[0]['body'];
+        self::assertStringContainsString('<CAEA>31234567890123</CAEA><CbteFchHsGen>', $body);
+    }
+
+    public function testInformCaeaValidatesCaea(): void
+    {
+        $this->expectException(ValidationException::class);
+        $this->see->informCaea(Factory::facturaB()->setNumero(15));
+    }
+
     public function testQrUrl(): void
     {
         $invoice = Factory::facturaA()->setNumero(42)->setCae('76123456789012');
