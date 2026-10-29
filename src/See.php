@@ -40,7 +40,12 @@ use RoyaltyFusion\Afip\Soap\CurlTransport;
 use RoyaltyFusion\Afip\Soap\SoapTransportInterface;
 use RoyaltyFusion\Afip\Support\Cuit;
 use RoyaltyFusion\Afip\Support\Date;
+use RoyaltyFusion\Afip\Support\Clock;
 use RoyaltyFusion\Afip\Support\FileLock;
+use RoyaltyFusion\Afip\Support\Fingerprint;
+use RoyaltyFusion\Afip\Support\Redactor;
+use RoyaltyFusion\Afip\Report\RepresentationData;
+use RoyaltyFusion\Afip\Exception\VoucherMismatchException;
 use RoyaltyFusion\Afip\Lock\NumberingLockInterface;
 use RoyaltyFusion\Afip\Support\Num;
 use RoyaltyFusion\Afip\Validator\ExportInvoiceValidator;
@@ -73,8 +78,10 @@ final class See
     private ?NumberingLockInterface $lock = null;
     /** @var array<string, string> */
     private array $endpoints = [];
-    /** @var callable|null */
+    /** @var callable|object|null callable o logger PSR-3 */
     private $logger = null;
+    private bool $redactLogs = true;
+    private Clock $clock;
 
     /** Recuperar el resultado con FECompConsultar ante errores de comunicación. */
     private bool $autoRecover = true;
@@ -124,10 +131,64 @@ final class See
     public function __construct(Environment|string $environment = Environment::HOMOLOGACION)
     {
         $this->environment = self::environment($environment);
+        $this->clock = new Clock();
         $this->validatorOptions = new ValidatorOptions();
     }
 
+    /**
+     * Crea una instancia para un emisor (CUIT + certificado + ambiente) sin estado global.
+     * Ver {@see SeeConfig::fromArray()} para las claves admitidas.
+     *
+     * @param array<string, mixed>|SeeConfig $config
+     */
+    public static function fromConfig(array|SeeConfig $config): self
+    {
+        $config = $config instanceof SeeConfig ? $config : SeeConfig::fromArray($config);
+        $see = (new self($config->environment))->setCertificate($config->certificate);
+        if ($config->cuit !== null) {
+            $see->setCuit($config->cuit);
+        }
+        if ($config->cacheDirectory !== null) {
+            $see->setCacheDirectory($config->cacheDirectory);
+        }
+        if ($config->ticketStorage !== null) {
+            $see->setTicketStorage($config->ticketStorage);
+        }
+        if ($config->numberingLock !== null) {
+            $see->setNumberingLock($config->numberingLock);
+        }
+        if ($config->transport !== null) {
+            $see->setTransport($config->transport);
+        }
+        if ($config->validatorOptions !== null) {
+            $see->setValidatorOptions($config->validatorOptions);
+        }
+        foreach ($config->endpoints as $service => $url) {
+            $see->setEndpoint($service, $url);
+        }
+        if ($config->logger !== null) {
+            $see->setLogger($config->logger);
+        }
+        if ($config->clock !== null) {
+            $see->setClock($config->clock);
+        }
+
+        return $see;
+    }
+
     // ------------------------------------------------------- Configuración
+
+    /**
+     * Reloj para la fecha de referencia de las validaciones (fecha civil de la oficina en tests).
+     * Acepta un reloj PSR-20 o un callable que devuelva un DateTimeInterface. El login al WSAA
+     * siempre usa la hora real del sistema (ARCA la compara con la suya).
+     */
+    public function setClock(callable|object|null $clock): self
+    {
+        $this->clock = new Clock($clock);
+
+        return $this;
+    }
 
     public function setEnvironment(Environment|string $environment): self
     {
@@ -246,12 +307,19 @@ final class See
     }
 
     /**
-     * Callback fn(string $operation, string $request, ?string $response, ?\Throwable $error)
-     * invocado en cada llamada SOAP (para auditar/guardar los XML).
+     * Registra cada llamada SOAP. Acepta un logger PSR-3 (debug en cada llamada, error si falla)
+     * o un callable fn(string $operation, string $request, ?string $response, ?\Throwable $error).
+     *
+     * Con $redact = true (por defecto) se ocultan token, sign, el CMS del login y las claves
+     * privadas antes de registrar. Los XML de AuthorizationResult::getRequestXml() no se modifican.
      */
-    public function setLogger(?callable $logger): self
+    public function setLogger(callable|object|null $logger, bool $redact = true): self
     {
+        if ($logger !== null && !is_callable($logger) && !method_exists($logger, 'log')) {
+            throw new \InvalidArgumentException('El logger debe ser un callable o un logger PSR-3.');
+        }
         $this->logger = $logger;
+        $this->redactLogs = $redact;
 
         return $this->reset();
     }
@@ -349,7 +417,7 @@ final class See
             }
             $wsaa = new Wsaa($this->certificate, $this->environment, $this->transport(), $this->endpoints[Endpoints::WSAA] ?? null);
             if ($this->logger !== null) {
-                $wsaa->getClient()->setLogger($this->logger);
+                $wsaa->getClient()->setLogger($this->soapLogger());
             }
             $this->ticketStorage ??= new FileTicketStorage(self::defaultCacheDirectory() . DIRECTORY_SEPARATOR . 'tickets');
             $this->authManager = new AuthManager($wsaa, $this->ticketStorage, $this->environment);
@@ -461,12 +529,12 @@ final class See
 
     public function validate(Invoice $invoice): ValidationResult
     {
-        return (new InvoiceValidator($this->validatorOptions))->validate($invoice);
+        return $this->invoiceValidator()->validate($invoice);
     }
 
     public function validateExport(ExportInvoice $invoice): ValidationResult
     {
-        return (new ExportInvoiceValidator($this->validatorOptions))->validate($invoice);
+        return (new ExportInvoiceValidator($this->effectiveOptions()))->validate($invoice);
     }
 
     // ------------------------------------------------------------ Emisión
@@ -512,7 +580,7 @@ final class See
                 $company->setCuit($this->getCuit());
             }
         }
-        $validator = new InvoiceValidator($this->validatorOptions);
+        $validator = $this->invoiceValidator();
         $validation = $validator->validateBatch($invoices, $channel->validationMode());
         if (count($invoices) > $channel->maxBatch()) {
             $validation->error('LOTE_EXCEDIDO', 'invoices', sprintf('Este servicio admite como máximo %d comprobante(s) por solicitud.', $channel->maxBatch()));
@@ -603,7 +671,7 @@ final class See
         if ($company !== null && $company->getCuit() === '') {
             $company->setCuit($this->getCuit());
         }
-        $validation = (new InvoiceValidator($this->validatorOptions))->validate($invoice, InvoiceValidator::MODE_BFE);
+        $validation = $this->invoiceValidator()->validate($invoice, InvoiceValidator::MODE_BFE);
         if (!$validation->isValid()) {
             throw new ValidationException($validation);
         }
@@ -647,7 +715,7 @@ final class See
      */
     public function informCaeaMtxca(Invoice $invoice): AuthorizationResult
     {
-        $validation = (new InvoiceValidator($this->validatorOptions))->validate($invoice, InvoiceValidator::MODE_MTXCA_CAEA);
+        $validation = $this->invoiceValidator()->validate($invoice, InvoiceValidator::MODE_MTXCA_CAEA);
         if (!$validation->isValid()) {
             throw new ValidationException($validation);
         }
@@ -665,7 +733,7 @@ final class See
     public function informCaea(Invoice|array $invoices): AuthorizationResult
     {
         $invoices = $invoices instanceof Invoice ? [$invoices] : array_values($invoices);
-        $validation = (new InvoiceValidator($this->validatorOptions))->validateBatch($invoices, InvoiceValidator::MODE_CAEA);
+        $validation = $this->invoiceValidator()->validateBatch($invoices, InvoiceValidator::MODE_CAEA);
         if (!$validation->isValid()) {
             throw new ValidationException($validation);
         }
@@ -728,6 +796,81 @@ final class See
     }
 
     /**
+     * Retoma un comprobante desde cualquier proceso (por ejemplo, un cron que reintenta un
+     * estado incierto): lo consulta en ARCA por tipo, punto de venta y número.
+     *
+     * - Si está autorizado con los mismos datos (importe, documento y fecha), completa el CAE en
+     *   el Invoice y devuelve el resultado ({@see AuthorizationResult::isRecovered()}).
+     * - Si no existe, devuelve null: puede reenviarse con el mismo número.
+     * - Si el número está autorizado con otros datos, lanza VoucherMismatchException.
+     *
+     * @param string|null $servicio wsfe (por defecto), wsmtxca o wsct (TurismoInvoice usa wsct)
+     *
+     * @throws VoucherMismatchException
+     */
+    public function reconcile(Invoice $invoice, ?string $servicio = null): ?AuthorizationResult
+    {
+        if ($invoice->getNumero() === null) {
+            throw new \InvalidArgumentException('Para reconciliar, el comprobante debe tener número.');
+        }
+        $channel = match (true) {
+            $invoice instanceof TurismoInvoice || $servicio === WsctService::SERVICE => new WsctChannel($this->getWsct()),
+            $servicio === WsmtxcaService::SERVICE => new WsmtxcaChannel($this->getWsmtxca()),
+            default => new WsfeChannel($this->getWsfe()),
+        };
+        $this->lastService = $channel->service();
+        $found = $channel->find($invoice->getTipoComprobante(), $invoice->getPuntoVenta(), (int) $invoice->getNumero());
+        if ($found === null) {
+            return null;
+        }
+        if (!$this->matches($found, $invoice)) {
+            throw new VoucherMismatchException(sprintf(
+                'El número %s está autorizado en ARCA con otros datos (total %s, documento %s, fecha %s).',
+                $invoice->getNumeroCompleto(),
+                Num::format($found->total),
+                $found->docNro,
+                $found->fecha?->format('d/m/Y') ?? '-'
+            ), $found->raw);
+        }
+        $invoice->setCae($found->cae);
+        $invoice->setCaeVencimiento($found->vencimiento);
+
+        return AuthorizationResult::recovered($invoice->getPuntoVenta(), $invoice->getTipoComprobante(), $found);
+    }
+
+    /**
+     * Cotización oficial de ARCA (FEParamGetCotizacion), redondeada a 6 decimales, lista para
+     * informar en el comprobante. PES devuelve 1.
+     *
+     * Si el comprobante se cancela en la misma moneda extranjera (CanMisMonExt = S), ARCA
+     * exige la cotización del día hábil anterior: indicar esa fecha.
+     */
+    public function getCotizacion(string $moneda, ?\DateTimeInterface $fecha = null): float
+    {
+        if ($moneda === 'PES') {
+            return 1.0;
+        }
+        $wsfe = $this->getWsfe();
+        $this->lastService = $wsfe;
+
+        return round($wsfe->getQuotation($moneda, $fecha)['cotizacion'], 6);
+    }
+
+    /**
+     * Datos para dibujar la representación impresa con el motor del ERP (TCPDF, etc.):
+     * letra, código, punto de venta (5 dígitos), número (8), CAE, vencimiento, URL del QR,
+     * importes y leyendas (Ley 27.743, RG 5003, RG 5700).
+     *
+     * @return array<string, mixed>
+     */
+    public function getRepresentationData(Invoice|ExportInvoice $invoice): array
+    {
+        $cuit = (string) $invoice->getCompany()?->getCuit();
+
+        return RepresentationData::build($invoice, $cuit !== '' ? $cuit : $this->getCuit());
+    }
+
+    /**
      * URL del QR (RG 4291) de un comprobante autorizado.
      */
     public function getQrUrl(Invoice|ExportInvoice $invoice): string
@@ -758,7 +901,7 @@ final class See
             $first = $invoices[0];
             $numbers = array_map(static fn (Invoice $i): int => (int) $i->getNumero(), $invoices);
             if (!$this->autoRecover) {
-                throw $this->uncertain($first->getPuntoVenta(), $first->getTipoComprobante(), $numbers, false, $e);
+                throw $this->uncertain($invoices, $channel->service()->getServiceName(), false, $e);
             }
 
             $found = [];
@@ -785,7 +928,7 @@ final class See
             }
 
             if (count($found) !== count($invoices)) {
-                throw $this->uncertain($first->getPuntoVenta(), $first->getTipoComprobante(), $numbers, $allNotFound, $e);
+                throw $this->uncertain($invoices, $channel->service()->getServiceName(), $allNotFound, $e);
             }
 
             foreach ($invoices as $i => $invoice) {
@@ -801,7 +944,7 @@ final class See
     {
         $numbers = [(int) $invoice->getNumero()];
         if (!$this->autoRecover) {
-            throw $this->uncertain($invoice->getPuntoVenta(), $invoice->getTipoComprobante(), $numbers, false, $e);
+            throw $this->uncertain([$invoice], 'wsfex', false, $e);
         }
         [$voucher, $confirmedMissing] = $this->lookup(fn (): ?array => $wsfex->getVoucher(
             $invoice->getTipoComprobante(),
@@ -809,7 +952,7 @@ final class See
             (int) $invoice->getNumero()
         ));
         if ($voucher === null) {
-            throw $this->uncertain($invoice->getPuntoVenta(), $invoice->getTipoComprobante(), $numbers, $confirmedMissing, $e);
+            throw $this->uncertain([$invoice], 'wsfex', $confirmedMissing, $e);
         }
 
         $sameClient = static fn (?string $a, ?string $b): bool => preg_replace('/\W/', '', (string) $a) === preg_replace('/\W/', '', (string) $b);
@@ -876,24 +1019,31 @@ final class See
     }
 
     /**
-     * @param int[] $numbers
+     * @param array<int, Invoice|ExportInvoice> $invoices
      */
-    private function uncertain(int $ptoVta, int $tipo, array $numbers, bool $notFound, TransportException $previous): UncertainAuthorizationException
+    private function uncertain(array $invoices, string $servicio, bool $notFound, TransportException $previous): UncertainAuthorizationException
     {
+        $first = $invoices[0];
+        $numbers = array_map(static fn (Invoice|ExportInvoice $i): int => (int) $i->getNumero(), $invoices);
+
         return new UncertainAuthorizationException(
             sprintf(
-                'No se pudo confirmar si ARCA autorizó el comprobante %s %05d-%s (%s). Reenvíe el MISMO comprobante, '
-                . 'con el mismo número: si ya estaba autorizado, el SDK devuelve ese CAE. No genere uno nuevo.',
-                TipoComprobante::description($tipo),
-                $ptoVta,
+                'No se pudo confirmar si ARCA autorizó el comprobante %s %05d-%s (%s). Reintente con See::reconcile() o reenvíe '
+                . 'el MISMO comprobante con el mismo número: si ya estaba autorizado, el SDK devuelve ese CAE. No genere uno nuevo.',
+                TipoComprobante::description($first->getTipoComprobante()),
+                $first->getPuntoVenta(),
                 implode(', ', array_map(static fn (int $n): string => sprintf('%08d', $n), $numbers)),
                 $previous->getMessage()
             ),
-            $ptoVta,
-            $tipo,
+            $first->getPuntoVenta(),
+            $first->getTipoComprobante(),
             $numbers,
             $notFound,
-            $previous
+            $previous,
+            Fingerprint::ofBatch($invoices, $this->getCuit()),
+            $servicio,
+            $this->getCuit(),
+            $this->environment->value
         );
     }
 
@@ -958,10 +1108,13 @@ final class See
     private function matches(FoundVoucher $voucher, Invoice $invoice): bool
     {
         $client = $invoice->getClient();
+        if ($client === null) {
+            return false;
+        }
 
         return Num::equals($voucher->total, $invoice->getImpTotal(), 0.01)
-            && $voucher->docTipo === $client?->getTipoDoc()
-            && ltrim($voucher->docNro, '0') === ltrim((string) $client?->getNumDoc(), '0')
+            && $voucher->docTipo === $client->getTipoDoc()
+            && ltrim($voucher->docNro, '0') === ltrim($client->getNumDoc(), '0')
             && $voucher->fecha?->format('Ymd') === $invoice->getFechaEmision()->format('Ymd');
     }
 
@@ -998,7 +1151,7 @@ final class See
     {
         $numbers = [(int) $invoice->getNumero()];
         if (!$this->autoRecover) {
-            throw $this->uncertain($invoice->getPuntoVenta(), $invoice->getTipoComprobante(), $numbers, false, $e);
+            throw $this->uncertain([$invoice], 'wsbfe', false, $e);
         }
         [$voucher, $confirmedMissing] = $this->lookup(fn (): ?array => $wsbfe->getVoucher(
             $invoice->getTipoComprobante(),
@@ -1006,7 +1159,7 @@ final class See
             (int) $invoice->getNumero()
         ));
         if ($voucher === null) {
-            throw $this->uncertain($invoice->getPuntoVenta(), $invoice->getTipoComprobante(), $numbers, $confirmedMissing, $e);
+            throw $this->uncertain([$invoice], 'wsbfe', $confirmedMissing, $e);
         }
         $fecha = (string) ($voucher['Fecha_cbte_orig'] ?? $voucher['Fecha_cbte_cae'] ?? '');
         $matches = Num::equals((float) ($voucher['Imp_total'] ?? -1), $invoice->getImpTotal(), 0.01)
@@ -1174,6 +1327,56 @@ final class See
         }
     }
 
+    private function invoiceValidator(): InvoiceValidator
+    {
+        return new InvoiceValidator($this->effectiveOptions());
+    }
+
+    /**
+     * Opciones de validación con la fecha de referencia del reloj inyectado.
+     */
+    private function effectiveOptions(): ValidatorOptions
+    {
+        if ($this->validatorOptions->fechaReferencia !== null) {
+            return $this->validatorOptions;
+        }
+        $options = clone $this->validatorOptions;
+        $options->fechaReferencia = $this->clock->today();
+
+        return $options;
+    }
+
+    /**
+     * Adapta el logger configurado (callable o PSR-3) y oculta credenciales si corresponde.
+     */
+    private function soapLogger(): ?callable
+    {
+        $logger = $this->logger;
+        if ($logger === null) {
+            return null;
+        }
+        $redact = $this->redactLogs;
+
+        return static function (string $operation, string $request, ?string $response, ?\Throwable $error) use ($logger, $redact): void {
+            if ($redact) {
+                $request = (string) Redactor::xml($request);
+                $response = Redactor::xml($response);
+            }
+            if (is_callable($logger)) {
+                $logger($operation, $request, $response, $error);
+
+                return;
+            }
+            $context = ['operation' => $operation, 'request' => $request, 'response' => $response];
+            if ($error !== null) {
+                $context['exception'] = $error;
+                $logger->log('error', 'ARCA {operation}: ' . $error->getMessage(), $context);
+            } else {
+                $logger->log('debug', 'ARCA {operation}', $context);
+            }
+        };
+    }
+
     /**
      * Agrupa condiciones equivalentes para comparar con el padrón (que no distingue, por
      * ejemplo, monotributo social de monotributo). null = el padrón no permite concluir.
@@ -1260,7 +1463,7 @@ final class See
     private function configure(AbstractService $service): AbstractService
     {
         if ($this->logger !== null) {
-            $service->getClient()->setLogger($this->logger);
+            $service->getClient()->setLogger($this->soapLogger());
         }
 
         return $service;

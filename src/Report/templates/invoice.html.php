@@ -229,6 +229,10 @@ $address = $company->getAddress();
     </div>
     <?php endif; ?>
 
+    <?php if (!empty($leyendaRg5003)): ?>
+    <div class="legend"><b><?= $e($leyendaRg5003) ?></b></div>
+    <?php endif; ?>
+
     <?php if (!$isExport && $consumidorFinal && $letra === 'B'): ?>
     <div class="legend"><b>A CONSUMIDOR FINAL</b></div>
     <?php endif; ?>

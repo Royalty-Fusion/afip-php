@@ -144,6 +144,9 @@ final class HtmlReport
             'ivaContenido' => $invoice->getImpIva(),
             'otrosNacionales' => $otrosNacionales,
             'consumidorFinal' => $client?->getCondicionIva() === CondicionIva::CONSUMIDOR_FINAL,
+            'leyendaRg5003' => $discrimina && $client?->getCondicionIva() !== null && CondicionIva::isMonotributo((int) $client->getCondicionIva())
+                ? RepresentationData::LEYENDA_RG5003
+                : null,
         ];
     }
 
