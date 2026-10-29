@@ -60,6 +60,7 @@ final class InvoiceCalculator
             + $invoice->getImpExento()
             + $invoice->getImpTributos()
             + $invoice->getImpIva()
+            + ($invoice instanceof \RoyaltyFusion\Afip\Model\Sale\TurismoInvoice ? $invoice->getImporteReintegro() : 0.0)
         ));
 
         return $invoice;

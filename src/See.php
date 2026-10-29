@@ -7,6 +7,7 @@ namespace RoyaltyFusion\Afip;
 use RoyaltyFusion\Afip\Emission\FoundVoucher;
 use RoyaltyFusion\Afip\Emission\VoucherChannel;
 use RoyaltyFusion\Afip\Emission\WsfeChannel;
+use RoyaltyFusion\Afip\Emission\WsctChannel;
 use RoyaltyFusion\Afip\Emission\WsmtxcaChannel;
 use RoyaltyFusion\Afip\Auth\AuthManager;
 use RoyaltyFusion\Afip\Auth\Certificate;
@@ -22,6 +23,7 @@ use RoyaltyFusion\Afip\Model\Response\AuthorizationResult;
 use RoyaltyFusion\Afip\Model\Response\ExportAuthorizationResult;
 use RoyaltyFusion\Afip\Model\Sale\BonoFiscalInvoice;
 use RoyaltyFusion\Afip\Model\Sale\Invoice;
+use RoyaltyFusion\Afip\Model\Sale\TurismoInvoice;
 use RoyaltyFusion\Afip\Catalog\TipoComprobante;
 use RoyaltyFusion\Afip\Qr\QrGenerator;
 use RoyaltyFusion\Afip\Service\AbstractService;
@@ -31,6 +33,7 @@ use RoyaltyFusion\Afip\Service\WsfeService;
 use RoyaltyFusion\Afip\Service\WsfexService;
 use RoyaltyFusion\Afip\Service\WsmtxcaService;
 use RoyaltyFusion\Afip\Service\WsbfeService;
+use RoyaltyFusion\Afip\Service\WsctService;
 use RoyaltyFusion\Afip\Soap\CurlTransport;
 use RoyaltyFusion\Afip\Soap\SoapTransportInterface;
 use RoyaltyFusion\Afip\Support\Cuit;
@@ -94,6 +97,7 @@ final class See
     private ?PadronA13Service $padronA13 = null;
     private ?WsmtxcaService $wsmtxca = null;
     private ?WsbfeService $wsbfe = null;
+    private ?WsctService $wsct = null;
     private ?AbstractService $lastService = null;
 
     private Environment $environment;
@@ -349,6 +353,17 @@ final class See
         ));
     }
 
+    public function getWsct(): WsctService
+    {
+        return $this->wsct ??= $this->configure(new WsctService(
+            $this->getAuthManager(),
+            $this->getCuit(),
+            $this->environment,
+            $this->transport(),
+            $this->endpoints[Endpoints::WSCT] ?? null
+        ));
+    }
+
     // ----------------------------------------------------------- Validación
 
     public function validate(Invoice $invoice): ValidationResult
@@ -468,6 +483,17 @@ final class See
     public function sendMtxca(Invoice $invoice): AuthorizationResult
     {
         return $this->emit(new WsmtxcaChannel($this->getWsmtxca()), [$invoice]);
+    }
+
+    /**
+     * Valida y autoriza un comprobante de turismo clase T (WSCT).
+     * Calcular antes con InvoiceCalculator::calculate($invoice, true).
+     *
+     * @throws ValidationException|UncertainAuthorizationException
+     */
+    public function sendTurismo(TurismoInvoice $invoice): AuthorizationResult
+    {
+        return $this->emit(new WsctChannel($this->getWsct()), [$invoice]);
     }
 
     /**
@@ -1038,6 +1064,7 @@ final class See
         $this->padronA13 = null;
         $this->wsmtxca = null;
         $this->wsbfe = null;
+        $this->wsct = null;
         $this->salesPoints = [];
 
         return $this;

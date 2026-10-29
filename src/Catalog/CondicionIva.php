@@ -95,7 +95,7 @@ final class CondicionIva
     public static function issuableClasses(int $emisorCondicion): array
     {
         return match (true) {
-            $emisorCondicion === self::RESPONSABLE_INSCRIPTO => ['A', 'B', 'M', 'E'],
+            $emisorCondicion === self::RESPONSABLE_INSCRIPTO => ['A', 'B', 'M', 'E', 'T'],
             self::isMonotributo($emisorCondicion), $emisorCondicion === self::EXENTO => ['C', 'E'],
             default => ['C', 'E'],
         };

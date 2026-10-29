@@ -48,12 +48,16 @@ final class TipoComprobante
     public const FCE_FACTURA_C = 211;
     public const FCE_NOTA_DEBITO_C = 212;
     public const FCE_NOTA_CREDITO_C = 213;
+    public const FACTURA_T = 195;
+    public const NOTA_DEBITO_T = 196;
+    public const NOTA_CREDITO_T = 197;
 
     public const CLASE_A = 'A';
     public const CLASE_B = 'B';
     public const CLASE_C = 'C';
     public const CLASE_M = 'M';
     public const CLASE_E = 'E';
+    public const CLASE_T = 'T';
 
     // Naturaleza del comprobante
     public const FACTURA = 'FACTURA';
@@ -107,6 +111,9 @@ final class TipoComprobante
         211 => ['Factura de Crédito Electrónica MiPyMEs (FCE) C', 'C', self::FACTURA, 'wsfe'],
         212 => ['Nota de Débito Electrónica MiPyMEs (FCE) C', 'C', self::NOTA_DEBITO, 'wsfe'],
         213 => ['Nota de Crédito Electrónica MiPyMEs (FCE) C', 'C', self::NOTA_CREDITO, 'wsfe'],
+        195 => ['Factura T (turismo)', 'T', self::FACTURA, 'wsct'],
+        196 => ['Nota de Débito T (turismo)', 'T', self::NOTA_DEBITO, 'wsct'],
+        197 => ['Nota de Crédito T (turismo)', 'T', self::NOTA_CREDITO, 'wsct'],
     ];
 
     public static function exists(int $id): bool
@@ -122,6 +129,11 @@ final class TipoComprobante
     public static function isWsfex(int $id): bool
     {
         return (self::DATA[$id][3] ?? null) === 'wsfex';
+    }
+
+    public static function isWsct(int $id): bool
+    {
+        return (self::DATA[$id][3] ?? null) === 'wsct';
     }
 
     public static function description(int $id): string
@@ -217,7 +229,7 @@ final class TipoComprobante
         return array_values(array_filter(
             array_keys(self::DATA),
             static fn (int $id): bool => self::clase($id) === $clase
-                && self::isWsfe($id) === self::isWsfe($noteType)
+                && (self::DATA[$id][3] ?? null) === (self::DATA[$noteType][3] ?? null)
                 && ($fce ? self::isFce($id) : !self::isFce($id))
         ));
     }

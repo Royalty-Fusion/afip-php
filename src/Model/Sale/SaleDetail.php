@@ -38,6 +38,8 @@ class SaleDetail
     private ?string $codigoSecretaria = null;
     private ?float $importeIva = null;
     private ?float $importeItem = null;
+    private int $tipoItem = 0;
+    private ?int $codigoTurismo = null;
 
     public function getCodigo(): ?string
     {
@@ -291,6 +293,36 @@ class SaleDetail
     public function setImporteItem(?float $importeItem): static
     {
         $this->importeItem = $importeItem;
+
+        return $this;
+    }
+
+    /**
+     * Tipo de ítem de turismo (WSCT consultarTiposItem; 0 = general).
+     */
+    public function getTipoItem(): int
+    {
+        return $this->tipoItem;
+    }
+
+    public function setTipoItem(int $tipoItem): static
+    {
+        $this->tipoItem = $tipoItem;
+
+        return $this;
+    }
+
+    /**
+     * Código de ítem de turismo (WSCT consultarCodigosItemTurismo, ej. 1 = alojamiento sin desayuno).
+     */
+    public function getCodigoTurismo(): ?int
+    {
+        return $this->codigoTurismo;
+    }
+
+    public function setCodigoTurismo(?int $codigoTurismo): static
+    {
+        $this->codigoTurismo = $codigoTurismo;
 
         return $this;
     }

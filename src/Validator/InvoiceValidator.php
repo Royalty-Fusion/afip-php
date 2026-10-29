@@ -14,6 +14,7 @@ use RoyaltyFusion\Afip\Catalog\TipoDocumento;
 use RoyaltyFusion\Afip\Catalog\TipoOpcional;
 use RoyaltyFusion\Afip\Catalog\TipoTributo;
 use RoyaltyFusion\Afip\Model\Sale\Invoice;
+use RoyaltyFusion\Afip\Model\Sale\TurismoInvoice;
 use RoyaltyFusion\Afip\Support\Cbu;
 use RoyaltyFusion\Afip\Support\Cuit;
 use RoyaltyFusion\Afip\Support\Date;
@@ -36,6 +37,8 @@ final class InvoiceValidator
     public const MODE_MTXCA_CAEA = 'mtxca_caea';
     /** WSBFE (bono fiscal electrónico). */
     public const MODE_BFE = 'bfe';
+    /** WSCT (comprobantes de turismo clase T). */
+    public const MODE_CT = 'ct';
 
     private const MAX_PTO_VTA = 99998;
     private const MAX_NUMERO = 99999999;
@@ -56,6 +59,9 @@ final class InvoiceValidator
         $tipo = $invoice->getTipoComprobante();
 
         $mtxca = in_array($mode, [self::MODE_MTXCA, self::MODE_MTXCA_CAEA], true);
+        if ($mode === self::MODE_CT) {
+            return $this->validateTurismo($invoice, $r);
+        }
         if (!TipoComprobante::exists($tipo) || !TipoComprobante::isWsfe($tipo)) {
             $r->error('CBTE_TIPO_INVALIDO', 'tipoComprobante', sprintf(
                 'El tipo de comprobante %d no es válido para WSFEv1%s.',
@@ -347,7 +353,8 @@ final class InvoiceValidator
             }
         }
 
-        $suma = $fields['impNoGravado'] + $fields['impNeto'] + $fields['impExento'] + $fields['impTributos'] + $fields['impIva'];
+        $suma = $fields['impNoGravado'] + $fields['impNeto'] + $fields['impExento'] + $fields['impTributos'] + $fields['impIva']
+            + ($invoice instanceof TurismoInvoice ? $invoice->getImporteReintegro() : 0.0);
         if (!Num::equals($fields['impTotal'], $suma, $tol)) {
             $r->error('TOTAL_NO_CUADRA', 'impTotal', sprintf(
                 'El importe total (%s) debe ser igual a No gravado + Neto + Exento + Tributos + IVA (%s).',
@@ -807,6 +814,103 @@ final class InvoiceValidator
         if (TipoComprobante::isFce($tipo) && $invoice->getClient() !== null && $invoice->getClient()->getTipoDoc() !== TipoDocumento::CUIT) {
             $r->error('FCE_RECEPTOR_CUIT', 'client.tipoDoc', 'En Factura de Crédito Electrónica MiPyME el receptor debe identificarse con CUIT.');
         }
+    }
+
+    /**
+     * Comprobantes de turismo (WSCT).
+     */
+    private function validateTurismo(Invoice $invoice, ValidationResult $r): ValidationResult
+    {
+        $tipo = $invoice->getTipoComprobante();
+        if (!$invoice instanceof TurismoInvoice) {
+            $r->error('CT_MODELO', 'invoice', 'Los comprobantes de turismo se emiten con TurismoInvoice.');
+
+            return $r;
+        }
+        if (!TipoComprobante::isWsct($tipo)) {
+            $r->error('CBTE_TIPO_INVALIDO', 'tipoComprobante', 'Los comprobantes de turismo son 195 (Factura T), 196 (Nota de Débito T) o 197 (Nota de Crédito T).');
+
+            return $r;
+        }
+
+        $this->validateHeader($invoice, $r);
+        if ($invoice->getPuntoVenta() > 9999) {
+            $r->error('PTO_VTA_INVALIDO', 'puntoVenta', 'En WSCT el punto de venta debe estar entre 1 y 9999.');
+        }
+        if ($invoice->getNumeroHasta() !== $invoice->getNumero()) {
+            $r->error('CT_RANGO', 'numeroHasta', 'WSCT autoriza un comprobante por solicitud (sin rangos).');
+        }
+        $this->validateEmisor($invoice, $r);
+        $this->validateFechas($invoice, $r, self::MODE_CAE);
+
+        // Receptor: el documento admite letras (pasaporte); la condición IVA va como idImpositivo.
+        $client = $invoice->getClient();
+        if ($client === null) {
+            $r->error('RECEPTOR_REQUERIDO', 'client', 'Debe informar el receptor.');
+        } else {
+            if (!TipoDocumento::exists($client->getTipoDoc())) {
+                $r->error('DOC_TIPO_INVALIDO', 'client.tipoDoc', 'El tipo de documento no es válido (consultarTiposDocumento).');
+            }
+            $nro = $client->getNumDoc();
+            if ($nro === '' || mb_strlen($nro) > 20) {
+                $r->error('DOC_NRO_INVALIDO', 'client.numDoc', 'Debe informar el número de documento del receptor (hasta 20 caracteres).');
+            } elseif (TipoDocumento::isCuitLike($client->getTipoDoc()) && !Cuit::isValid($nro)) {
+                $r->error('DOC_NRO_INVALIDO', 'client.numDoc', sprintf('El CUIT/CUIL "%s" no es válido.', $nro));
+            }
+            if ($client->getCondicionIva() === null) {
+                $r->error('CONDICION_IVA_REQUERIDA', 'client.condicionIva', 'Debe informar la condición frente al IVA del receptor (idImpositivo, ej. 9 = Cliente del Exterior).');
+            } elseif (!CondicionIva::exists($client->getCondicionIva())) {
+                $r->error('CONDICION_IVA_INVALIDA', 'client.condicionIva', 'La condición frente al IVA no es válida (consultarCondicionesIVA).');
+            }
+        }
+        if ($invoice->getCodigoRelacionEmisorReceptor() <= 0) {
+            $r->error('CT_RELACION', 'codigoRelacionEmisorReceptor', 'Debe informar la relación emisor-receptor (consultarRelacionEmisorReceptor).');
+        }
+        if (mb_strlen((string) $invoice->getDomicilioReceptor()) > 300) {
+            $r->error('CT_DOMICILIO', 'domicilioReceptor', 'El domicilio del receptor admite hasta 300 caracteres.');
+        }
+        $reintegro = $invoice->getImporteReintegro();
+        if ($reintegro > 0) {
+            $r->error('CT_REINTEGRO', 'importeReintegro', 'El reintegro se informa como importe negativo (o 0).');
+        } elseif (-$reintegro > $invoice->getImpIva() + $this->options->tolerancia) {
+            $r->error('CT_REINTEGRO', 'importeReintegro', 'El reintegro no puede superar el IVA del comprobante.');
+        } elseif (Num::decimals($reintegro) > 2) {
+            $r->error('IMPORTE_DECIMALES', 'importeReintegro', 'El reintegro admite como máximo 2 decimales.');
+        }
+        foreach (['opcionales' => $invoice->getOpcionales(), 'compradores' => $invoice->getCompradores(), 'actividades' => $invoice->getActividades()] as $field => $value) {
+            if ($value !== []) {
+                $r->error('CT_NO_SOPORTADO', $field, sprintf('WSCT no admite %s.', $field));
+            }
+        }
+        if ($invoice->getPeriodoAsociado() !== null) {
+            $r->error('CT_NO_SOPORTADO', 'periodoAsociado', 'WSCT no admite período asociado.');
+        }
+        if ($invoice->getFormasPago() === []) {
+            $r->warning('CT_FORMA_PAGO', 'formasPago', 'Se recomienda informar la forma de pago (consultarFormasPago).');
+        }
+        foreach ($invoice->getFormasPago() as $i => $fp) {
+            if ($fp->getNumeroTarjeta() !== null && !preg_match('/^\d{6}$/', $fp->getNumeroTarjeta())) {
+                $r->error('CT_TARJETA', sprintf('formasPago[%d].numeroTarjeta', $i), 'Informe solo los 6 primeros dígitos de la tarjeta.');
+            }
+            if ($fp->getSwiftCode() !== null && !preg_match('/^[A-Z0-9]{8,11}$/', $fp->getSwiftCode())) {
+                $r->error('CT_SWIFT', sprintf('formasPago[%d].swiftCode', $i), 'El código SWIFT debe tener entre 8 y 11 caracteres.');
+            }
+        }
+        foreach ($invoice->getDetails() as $i => $detail) {
+            $codigo = (string) $detail->getCodigo();
+            if ($codigo !== '' && (mb_strlen($codigo) < 3 || mb_strlen($codigo) > 50)) {
+                $r->error('CT_ITEM_CODIGO', sprintf('details[%d].codigo', $i), 'El código del ítem debe tener entre 3 y 50 caracteres.');
+            }
+        }
+
+        $this->validateImportes($invoice, $r);
+        $this->validateIva($invoice, $r, false);
+        $this->validateTributos($invoice, $r);
+        $this->validateMoneda($invoice, $r);
+        $this->validateAsociados($invoice, $r);
+        $this->validateItemized($invoice, $r, 'WSCT');
+
+        return $r;
     }
 
     /**
