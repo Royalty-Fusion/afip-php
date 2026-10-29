@@ -230,6 +230,12 @@ El comprobante impreso trae:
 
 Para usar un diseño propio, pasá `['template' => '/ruta/plantilla.php']`.
 
+## Symfony
+
+El SDK no depende de ningún framework y funciona con Symfony 7.4, Laravel o PHP plano.
+La configuración de servicios para Symfony, con los tickets en la caché de Symfony, está en
+[docs/SYMFONY.md](docs/SYMFONY.md).
+
 ## Errores
 
 Todas las excepciones extienden `RoyaltyFusion\Afip\Exception\AfipException`.

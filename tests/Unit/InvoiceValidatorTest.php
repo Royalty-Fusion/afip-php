@@ -104,6 +104,20 @@ final class InvoiceValidatorTest extends TestCase
         self::assertValid($this->validator->validate($invoice));
     }
 
+    public function testAllDocumentTypesAreAccepted(): void
+    {
+        foreach (array_keys(TipoDocumento::all()) as $tipo) {
+            $numero = match (true) {
+                TipoDocumento::isCuitLike($tipo) => '20267565393',
+                $tipo === TipoDocumento::OTRO => '0',
+                default => '26756539',
+            };
+            $invoice = Factory::facturaB()->setClient((new Client())->setTipoDoc($tipo)->setNumDoc($numero)->setCondicionIva(CondicionIva::CONSUMIDOR_FINAL));
+            self::assertValid($this->validator->validate($invoice));
+        }
+        self::assertCount(38, TipoDocumento::all());
+    }
+
     public function testDocTipo99RequiresZero(): void
     {
         $invoice = Factory::facturaB();

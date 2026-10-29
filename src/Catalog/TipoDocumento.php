@@ -21,6 +21,8 @@ final class TipoDocumento
     public const CI_BS_AS_RNP = 95;
     public const DNI = 96;
     public const OTRO = 99;
+    public const CERTIFICADO_MIGRACION = 30;
+    public const USADO_ANSES_PADRON = 88;
     /** Alias habitual: consumidor final sin identificar. */
     public const CONSUMIDOR_FINAL = 99;
 
@@ -62,6 +64,8 @@ final class TipoDocumento
         22 => 'CI Río Negro',
         23 => 'CI Santa Cruz',
         24 => 'CI Tierra del Fuego',
+        30 => 'Certificado de Migración',
+        88 => 'Usado por Anses para Padrón',
     ];
 
     public static function exists(int $id): bool

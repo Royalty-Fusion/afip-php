@@ -88,16 +88,23 @@ final class See
     private ?PadronA13Service $padronA13 = null;
     private ?AbstractService $lastService = null;
 
-    public function __construct(private Environment $environment = Environment::HOMOLOGACION)
+    private Environment $environment;
+
+    /**
+     * @param Environment|string $environment también acepta "homologacion" o "produccion"
+     *                                        (útil para configurarlo desde variables de entorno)
+     */
+    public function __construct(Environment|string $environment = Environment::HOMOLOGACION)
     {
+        $this->environment = self::environment($environment);
         $this->validatorOptions = new ValidatorOptions();
     }
 
     // ------------------------------------------------------- Configuración
 
-    public function setEnvironment(Environment $environment): self
+    public function setEnvironment(Environment|string $environment): self
     {
-        $this->environment = $environment;
+        $this->environment = self::environment($environment);
 
         return $this->reset();
     }
@@ -828,6 +835,22 @@ final class See
     private function transport(): SoapTransportInterface
     {
         return $this->transport ??= new CurlTransport();
+    }
+
+    private static function environment(Environment|string $environment): Environment
+    {
+        if ($environment instanceof Environment) {
+            return $environment;
+        }
+        $value = strtolower(trim($environment));
+        $value = match ($value) {
+            'homo', 'testing', 'test', 'dev' => 'homologacion',
+            'prod', 'production' => 'produccion',
+            default => $value,
+        };
+
+        return Environment::tryFrom($value)
+            ?? throw new \InvalidArgumentException(sprintf('Ambiente "%s" inválido: use "homologacion" o "produccion".', $environment));
     }
 
     private function reset(): self

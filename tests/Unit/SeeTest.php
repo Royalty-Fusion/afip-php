@@ -49,6 +49,15 @@ final class SeeTest extends TestCase
         ));
     }
 
+    public function testEnvironmentFromString(): void
+    {
+        self::assertSame(Environment::PRODUCCION, (new See('produccion'))->getEnvironment());
+        self::assertSame(Environment::HOMOLOGACION, (new See('homologacion'))->getEnvironment());
+        self::assertSame(Environment::PRODUCCION, (new See('prod'))->getEnvironment());
+        $this->expectException(\InvalidArgumentException::class);
+        new See('staging');
+    }
+
     public function testCuitIsTakenFromCertificate(): void
     {
         self::assertSame('20111111112', $this->see->getCuit());
