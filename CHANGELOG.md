@@ -3,6 +3,17 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/); el proyecto
 usa [versionado semántico](https://semver.org/lang/es/).
 
+## [0.1.1] - 2026-10-30
+
+### Agregado
+- Libro IVA Digital (RG 4597): `LibroIvaDigital` genera los TXT de importación de ventas,
+  compras y despachos de importación (comprobantes y alícuotas), con más de 30
+  validaciones antes de generar. `RegistroFactory` arma los registros desde `Invoice`,
+  `ExportInvoice` o el QR de un comprobante recibido.
+- Compras: `MisComprobantesParser` lee el CSV de "Mis Comprobantes" (emitidos y recibidos)
+  y reconoce las columnas por nombre, con alícuotas por columna o deducidas.
+- `See::verifyReceived()` y `See::verifyQr()` constatan con WSCDC una compra o un QR.
+
 ## [0.1.0] - 2026-10-29
 
 Primera versión publicada.

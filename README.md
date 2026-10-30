@@ -23,6 +23,8 @@ contacta a ARCA**.
 | **WSCDC** | Constatación de comprobantes: verifica ante ARCA las facturas de proveedores (CAE, CAEA o CAI). |
 | **Padrón A5** | Constancia de inscripción: razón social, domicilio fiscal, impuestos, actividades y condición frente al IVA deducida. Devuelve el receptor listo para facturar. |
 | **Padrón A13** | Datos de identificación y CUIT/CUIL a partir de un DNI. |
+| **Libro IVA Digital** | Archivos TXT de importación de ventas, compras y despachos de importación (RG 4597), validados antes de generarlos. |
+| **Compras** | Lectura del CSV de "Mis Comprobantes" (emitidos y recibidos) y constatación de cada compra o de un QR con WSCDC. |
 | **QR** | Código QR de la RG 4291 (con CAE o CAEA). |
 | **Representación impresa** | HTML y PDF con el formato de ARCA: letra y código, CAE, QR y las leyendas de la Ley 27.743 y de la RG 5700. |
 | **Calculadora** | Calcula neto, IVA por alícuota, exento, no gravado, tributos y total a partir de los ítems, con el redondeo que exige ARCA. |
@@ -265,6 +267,35 @@ $see->setValidatorOptions(new ValidatorOptions(
 - **Contingencia:** con CAEA se pide el código por quincena (`requestCaea`), se emite offline y después se informa con `$see->informCaea($invoices)`.
 - **Clientes:** `$see->getPadronA5()->getPersona($cuit)?->toClient()` arma el receptor con la razón social, el domicilio y la condición frente al IVA.
 - **Endpoints:** `$see->setEndpoint(Endpoints::WSFE, $url)` cambia la URL de un servicio, por ejemplo para un simulador o si ARCA migra de dominio.
+
+## Libro IVA Digital y compras
+
+ARCA no tiene folios: cada comprobante se numera en orden y se autoriza con CAE. Tampoco
+tiene un web service para descargar los comprobantes recibidos; el camino oficial es
+exportar el CSV de "Mis Comprobantes" e importarlo:
+
+```php
+use RoyaltyFusion\Afip\Libro\{LibroIvaDigital, MisComprobantesParser};
+
+$parser = new MisComprobantesParser();
+$compras = $parser->parseFile('mis_comprobantes_recibidos.csv');   // RegistroIva[]
+$parser->getWarnings();                                              // filas omitidas, alícuotas a revisar
+
+foreach ($compras as $compra) {
+    $see->verifyReceived($compra)->isSuccess();   // constata con WSCDC (CAE, CAEA o CAI)
+}
+$see->verifyQr($urlDelQr);                        // o directamente desde el QR impreso
+
+$libro = (new LibroIvaDigital($see->getCuit()))
+    ->setPeriodo(2026, 10)
+    ->addVentas($facturasDelMes)      // Invoice, ExportInvoice o RegistroIva
+    ->addCompras($compras);
+
+$libro->validate();                   // ValidationResult: totales, alícuotas, documentos, duplicados, período
+$libro->writeTo('/tmp/libro-iva');    // TXT listos para "Importar" en el Libro de IVA Digital
+```
+
+Detalle de los archivos, el mapeo de tributos y las validaciones en [docs/LIBRO_IVA.md](docs/LIBRO_IVA.md).
 
 ## Representación impresa
 

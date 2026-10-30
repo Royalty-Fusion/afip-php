@@ -25,6 +25,10 @@ use RoyaltyFusion\Afip\Model\Sale\BonoFiscalInvoice;
 use RoyaltyFusion\Afip\Model\Sale\Invoice;
 use RoyaltyFusion\Afip\Model\Sale\TurismoInvoice;
 use RoyaltyFusion\Afip\Catalog\TipoComprobante;
+use RoyaltyFusion\Afip\Catalog\TipoDocumento;
+use RoyaltyFusion\Afip\Libro\RegistroFactory;
+use RoyaltyFusion\Afip\Libro\RegistroIva;
+use RoyaltyFusion\Afip\Model\Response\OperationResult;
 use RoyaltyFusion\Afip\Qr\QrGenerator;
 use RoyaltyFusion\Afip\Service\AbstractService;
 use RoyaltyFusion\Afip\Service\PadronA13Service;
@@ -876,6 +880,65 @@ final class See
     public function getQrUrl(Invoice|ExportInvoice $invoice): string
     {
         return (new QrGenerator())->buildUrl($invoice, $this->getCuit());
+    }
+
+    /**
+     * Constata con WSCDC un comprobante recibido (por ejemplo, uno importado de "Mis
+     * Comprobantes" o leído del QR). Resultado A: el comprobante existe y coincide.
+     *
+     * @param bool $informarReceptor envía la CUIT propia como receptor (obligatorio en A y M)
+     */
+    public function verifyReceived(RegistroIva $compra, bool $informarReceptor = true): OperationResult
+    {
+        if (!TipoDocumento::isCuitLike($compra->getDocTipo()) || !Cuit::isValid($compra->getDocNro())) {
+            throw new \InvalidArgumentException('Para constatar el comprobante hace falta la CUIT válida del emisor.');
+        }
+        $codigo = $compra->getCodigoAutorizacion();
+        if ($codigo === null) {
+            throw new \InvalidArgumentException(sprintf('El comprobante %s no tiene código de autorización (CAE, CAEA o CAI).', $compra->getClave()));
+        }
+        $modo = match ($compra->getTipoCodigoAutorizacion()) {
+            'CAEA' => WscdcService::MODO_CAEA,
+            'CAI' => WscdcService::MODO_CAI,
+            default => WscdcService::MODO_CAE,
+        };
+
+        return $this->getWscdc()->verify(
+            $compra->getDocNro(),
+            $compra->getPuntoVenta(),
+            $compra->getTipoComprobante(),
+            $compra->getNumero(),
+            $compra->getFecha(),
+            $compra->getTotal(),
+            $codigo,
+            $modo,
+            $informarReceptor ? TipoDocumento::CUIT : null,
+            $informarReceptor ? $this->getCuit() : null
+        );
+    }
+
+    /**
+     * Constata con WSCDC el comprobante de un QR (URL https://www.afip.gob.ar/fe/qr/?p=...).
+     * Se informa como receptor el documento que trae el QR.
+     */
+    public function verifyQr(string $url): OperationResult
+    {
+        $data = QrGenerator::decode($url);
+        $registro = RegistroFactory::fromQr($url);
+        $codigo = (string) $registro->getCodigoAutorizacion();
+
+        return $this->getWscdc()->verify(
+            $registro->getDocNro(),
+            $registro->getPuntoVenta(),
+            $registro->getTipoComprobante(),
+            $registro->getNumero(),
+            $registro->getFecha(),
+            $registro->getTotal(),
+            $codigo,
+            $registro->getTipoCodigoAutorizacion() === 'CAEA' ? WscdcService::MODO_CAEA : WscdcService::MODO_CAE,
+            isset($data['tipoDocRec']) ? (int) $data['tipoDocRec'] : null,
+            isset($data['nroDocRec']) ? (string) $data['nroDocRec'] : null
+        );
     }
 
     public function getLastRequestXml(): ?string
