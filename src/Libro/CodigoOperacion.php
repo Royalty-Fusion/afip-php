@@ -18,7 +18,7 @@ final class CodigoOperacion
     public const EXTERIOR = 'X';
     public const ZONA_FRANCA = 'Z';
 
-    /** @var array<string, string> */
+    /** @var array<int|string, string> la clave "0" queda como entero */
     private const VENTAS = [
         '0' => 'Sin código de operación',
         'Z' => 'Exportaciones a zona franca',
@@ -29,7 +29,7 @@ final class CodigoOperacion
         'T' => 'Reintegro Decreto 1043/2016',
     ];
 
-    /** @var array<string, string> */
+    /** @var array<int|string, string> la clave "0" queda como entero */
     private const COMPRAS = [
         '0' => 'Sin código de operación',
         'A' => 'No alcanzado',
@@ -47,7 +47,7 @@ final class CodigoOperacion
     }
 
     /**
-     * @return array<string, string>
+     * @return array<int|string, string>
      */
     public static function all(string $libro): array
     {
